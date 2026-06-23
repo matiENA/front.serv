@@ -127,40 +127,64 @@ async function actualizarCacheDesdeGoogle() {
             fetchSeguro(`${GAS_URL}?action=obtenerTDs`, 'TDs Legacy')
         ]);
 
+       // =========================================================================
+        // 2. Consultamos Supabase (Padrón de Choferes) 
+        // IMPORTANTE: Agregamos explícitamente el campo 'id'
+        // =========================================================================
         const { data: choferes, error: errSupabase } = await supabase
             .from('choferes')
-            .select('nombre, c_servicio, units(n_ute, tractor, semi)');
+            .select('id, nombre, c_servicio, units(n_ute, tractor, semi)');
 
+        if (errSupabase) console.error("⚠️ Error leyendo Supabase:", errSupabase.message);
+
+        // 👉 DICCIONARIO ANTI-FALLOS: Vinculamos ID con Nombre Normalizado
+        const mapaNombresId = {};
+        const normalizar = (n) => String(n || '').trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, ' ');
+
+        if (choferes) {
+            choferes.forEach(c => {
+                mapaNombresId[c.id] = normalizar(c.nombre);
+            });
+        }
+
+        // =========================================================================
+        // 🌟 3. LEER LOS VIAJES DIRECTAMENTE DESDE SUPABASE SQL
+        // =========================================================================
         const fechaLimite = new Date();
-        fechaLimite.setDate(fechaLimite.getDate() - 60); 
+        fechaLimite.setDate(fechaLimite.getDate() - 365); // Traemos 1 AÑO de historia, no solo 60 días
         const fechaLimiteStr = fechaLimite.toISOString().split('T')[0];
 
-        const { data: registrosViajesSQL } = await supabase
+        // Ya no hacemos el Join '.select('*, choferes(nombre)')' que suele fallar en Supabase.
+        // Ahora traemos la tabla pura de viajes.
+        const { data: registrosViajesSQL, error: errV } = await supabase
             .from('registros_viajes_km')
-            .select('*, choferes(nombre)')
+            .select('*')
             .gte('fecha', fechaLimiteStr);
 
         let nuevaSeccionViajes = {};
-        const normalizar = (n) => String(n || '').trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, ' ');
 
-        if (registrosViajesSQL) {
+        if (!errV && registrosViajesSQL) {
             registrosViajesSQL.forEach(row => {
-                if (!row.choferes) return;
-                const choferNorm = normalizar(row.choferes.nombre);
+                // Obtenemos el nombre exacto del chofer usando su ID desde nuestro diccionario
+                const choferNorm = mapaNombresId[row.chofer_id];
+                if (!choferNorm) return; 
+                
                 if (!nuevaSeccionViajes[choferNorm]) nuevaSeccionViajes[choferNorm] = {};
                 
-                nuevaSeccionViajes[choferNorm][row.fecha] = {
-                    dominio: row.dominio || '', 
-                    km: Number(row.km || 0), // 👈 ¡ESTA LÍNEA ES VITAL PARA EL HISTÓRICO!
-                    liviano: Number(row.liviano || 0), 
+                // Formateamos seguro la fecha para que coincida con el Frontend
+                const fechaLimpia = String(row.fecha).split('T')[0];
+
+                nuevaSeccionViajes[choferNorm][fechaLimpia] = {
+                    dominio: row.dominio || '',
+                    km: Number(row.km || 0),
+                    liviano: Number(row.liviano || 0),
                     euro: Number(row.euro || 0),
-                    campo: Number(row.campo || 0), 
-                    infiniaD: Number(row.infinia_d || 0), 
+                    campo: Number(row.campo || 0),
+                    infiniaD: Number(row.infinia_d || 0),
                     hoja_ruta: row.hoja_ruta || []
                 };
             });
         }
-
         let diagramasHibridos = [];
         if (choferes) {
             const dictDiasGAS = {};
