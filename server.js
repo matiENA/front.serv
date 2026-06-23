@@ -150,8 +150,13 @@ async function actualizarCacheDesdeGoogle() {
                 if (!nuevaSeccionViajes[choferNorm]) nuevaSeccionViajes[choferNorm] = {};
                 
                 nuevaSeccionViajes[choferNorm][row.fecha] = {
-                    dominio: row.dominio || '', liviano: Number(row.liviano || 0), euro: Number(row.euro || 0),
-                    campo: Number(row.campo || 0), infiniaD: Number(row.infinia_d || 0), hoja_ruta: row.hoja_ruta || []
+                    dominio: row.dominio || '', 
+                    km: Number(row.km || 0), // 👈 ¡ESTA LÍNEA ES VITAL PARA EL HISTÓRICO!
+                    liviano: Number(row.liviano || 0), 
+                    euro: Number(row.euro || 0),
+                    campo: Number(row.campo || 0), 
+                    infiniaD: Number(row.infinia_d || 0), 
+                    hoja_ruta: row.hoja_ruta || []
                 };
             });
         }

@@ -26,19 +26,21 @@ async function leerRangoLiviano(rango) {
     }
 }
 
-// 🛡️ CANDADO ANTI-COLAPSO
 let trabajando = false;
 
-async function sincronizarViajesASupabase() {
-    if (trabajando) {
-        console.log("⚠️ [Worker Viajes] Ejecución múltiple detectada. Se omitirá para proteger la RAM.");
-        return;
-    }
+// 👉 NUEVO: Le decimos al script cuántos días hacia atrás debe sincronizar (Por defecto 3)
+async function sincronizarViajesASupabase(diasHaciaAtras = 3) {
+    if (trabajando) return;
     trabajando = true;
 
     try {
-        console.log("⏳ [Worker Viajes] Descargando histórico (Modo Low-Memory)...");
+        console.log(`⏳ [Worker Viajes] Sincronizando solo los últimos ${diasHaciaAtras} días (Protegiendo IOPS de Supabase)...`);
         
+        // Calculamos la fecha límite
+        const fechaLimiteObj = new Date();
+        fechaLimiteObj.setDate(fechaLimiteObj.getDate() - diasHaciaAtras);
+        const limiteIso = fechaLimiteObj.toISOString().split('T')[0];
+
         const { data: choferesDB, error: errC } = await supabase.from('choferes').select('id, nombre');
         if (errC) throw errC;
         
@@ -54,6 +56,7 @@ async function sincronizarViajesASupabase() {
         }
 
         let mapaKms = {};
+        // Si solo leemos 3 días, no vale la pena traer los KMs de hace años
         const kmData = await leerRangoLiviano('api_km!A:A');
         if (kmData.length > 0) {
             const chunksKm = kmData.map(row => String(row[0] || '').replace(/^'/, ""));
@@ -63,12 +66,16 @@ async function sincronizarViajesASupabase() {
 
         const dbRows = {};
 
+        // A) Filtrado de Viajes Detallados
         for (let choferNorm in viajesDetalleObj) {
             const choferId = mapaChoferes[normalizar(choferNorm)];
             if (!choferId) continue;
             if (!dbRows[choferId]) dbRows[choferId] = {};
 
             for (let fechaIso in viajesDetalleObj[choferNorm]) {
+                // 🛑 EL FILTRO SALVAVIDAS: Si el viaje es viejo, lo ignoramos y no lo mandamos a Supabase
+                if (fechaIso < limiteIso) continue;
+
                 const src = viajesDetalleObj[choferNorm][fechaIso];
                 dbRows[choferId][fechaIso] = {
                     chofer_id: choferId, fecha: fechaIso, dominio: src.dominio || null,
@@ -78,6 +85,7 @@ async function sincronizarViajesASupabase() {
             }
         }
 
+        // B) Filtrado de Kilómetros
         for (let choferRaw in mapaKms) {
             const choferId = mapaChoferes[normalizar(choferRaw)];
             if (!choferId) continue;
@@ -87,6 +95,10 @@ async function sincronizarViajesASupabase() {
                 let partes = reg.fechaCorta.split('/');
                 if (partes.length === 3) {
                     let fechaIso = `20${partes[2]}-${partes[1].padStart(2, '0')}-${partes[0].padStart(2, '0')}`;
+                    
+                    // 🛑 EL FILTRO SALVAVIDAS
+                    if (fechaIso < limiteIso) return;
+
                     if (!dbRows[choferId][fechaIso]) {
                         dbRows[choferId][fechaIso] = {
                             chofer_id: choferId, fecha: fechaIso, dominio: null, km: 0,
@@ -105,13 +117,12 @@ async function sincronizarViajesASupabase() {
             }
         }
 
-        // 👉 LIBERACIÓN MANUAL DE MEMORIA
         viajesDetalleObj = null;
         mapaKms = null;
 
-        if (rowsParaInsertar.length === 0) return;
+        if (rowsParaInsertar.length === 0) return console.log("⏳ [Worker Viajes] Sin viajes nuevos recientes.");
 
-        console.log(`🚀 Volcando ${rowsParaInsertar.length} registros a Supabase...`);
+        console.log(`🚀 Volcando ${rowsParaInsertar.length} registros recientes a Supabase...`);
         
         let insertadosOk = 0;
         for (let i = 0; i < rowsParaInsertar.length; i += 150) {
@@ -121,12 +132,12 @@ async function sincronizarViajesASupabase() {
             else console.error("Error Upsert parcial:", errUpsert.message);
         }
 
-        console.log(`✅ Migración Completa: ${insertadosOk} registros históricos sincronizados.`);
+        console.log(`✅ Viajes actualizados en Supabase (${insertadosOk} filas).`);
 
     } catch (error) {
         console.error("❌ Error CRÍTICO en sincronizador de Viajes:", error.message);
     } finally {
-        trabajando = false; // LIBERAMOS EL CANDADO SIEMPRE
+        trabajando = false;
     }
 }
 
