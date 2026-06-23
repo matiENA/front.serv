@@ -52,17 +52,13 @@ const fetchSeguro = async (url, nombre) => {
 };
 
 // ==========================================
-// 🛡️ SISTEMA DE COLAS (CANDADOS DE HILO ÚNICO)
+// 🛡️ SISTEMA DE COLAS (CANDADOS)
 // ==========================================
-
 let ejecutandoKM = false;
 let pendienteKM = false;
 
 async function flujoEncoladoKM() {
-    if (ejecutandoKM) {
-        pendienteKM = true; 
-        return; 
-    }
+    if (ejecutandoKM) { pendienteKM = true; return; }
     ejecutandoKM = true;
     try {
         console.log("🚚 Procesando KM hacia SQL y RAM...");
@@ -71,10 +67,7 @@ async function flujoEncoladoKM() {
         console.log(`✅ Socket emitido tras webhook de KM`);
     } finally {
         ejecutandoKM = false;
-        if (pendienteKM) {
-            pendienteKM = false;
-            flujoEncoladoKM(); 
-        }
+        if (pendienteKM) { pendienteKM = false; flujoEncoladoKM(); }
     }
 }
 
@@ -82,25 +75,16 @@ let ejecutandoGlobal = false;
 let pendienteGlobal = false;
 
 async function flujoEncoladoGlobal() {
-    if (ejecutandoGlobal) {
-        pendienteGlobal = true;
-        return;
-    }
+    if (ejecutandoGlobal) { pendienteGlobal = true; return; }
     ejecutandoGlobal = true;
     try {
         await actualizarCacheDesdeGoogle();
     } finally {
         ejecutandoGlobal = false;
-        if (pendienteGlobal) {
-            pendienteGlobal = false;
-            flujoEncoladoGlobal();
-        }
+        if (pendienteGlobal) { pendienteGlobal = false; flujoEncoladoGlobal(); }
     }
 }
 
-// ==========================================
-// 🚀 WORKERS PERMANENTES 
-// ==========================================
 const TIEMPO_SYNC = 5 * 60 * 1000; 
 
 setTimeout(() => {
@@ -112,7 +96,6 @@ setInterval(() => {
     sincronizarTractoresContinuo();
     flujoEncoladoKM(); 
 }, TIEMPO_SYNC);
-
 
 // ==========================================
 // 2. EL WORKER DE NODE (MERGE HÍBRIDO + SQL)
@@ -127,7 +110,6 @@ async function actualizarCacheDesdeGoogle() {
             fetchSeguro(`${GAS_URL}?action=obtenerTDs`, 'TDs Legacy')
         ]);
 
-        // 👉 1. TRAER CHOFERES CON SU 'ID'
         const { data: choferes, error: errSupabase } = await supabase
             .from('choferes')
             .select('id, nombre, c_servicio, units(n_ute, tractor, semi)');
@@ -136,28 +118,27 @@ async function actualizarCacheDesdeGoogle() {
         const mapaNombresId = {};
         
         if (choferes) {
-            choferes.forEach(c => {
-                mapaNombresId[c.id] = normalizar(c.nombre);
-            });
+            choferes.forEach(c => { mapaNombresId[c.id] = normalizar(c.nombre); });
         }
 
-        // 👉 2. TRAER VIAJES PUROS (Sin Joins peligrosos, 365 días)
         const fechaLimite = new Date();
         fechaLimite.setDate(fechaLimite.getDate() - 365); 
         const fechaLimiteStr = fechaLimite.toISOString().split('T')[0];
 
-        const { data: registrosViajesSQL } = await supabase
+        const { data: registrosViajesSQL, error: errV } = await supabase
             .from('registros_viajes_km')
             .select('*')
             .gte('fecha', fechaLimiteStr);
 
+        if (errV) console.error("⚠️ Error leyendo SQL:", errV);
+        console.log(`📥 [SQL] Viajes descargados de Supabase: ${registrosViajesSQL ? registrosViajesSQL.length : 0} registros.`);
+
         let nuevaSeccionViajes = {};
 
-        // 👉 3. CRUCE INTELIGENTE EN MEMORIA RAM
         if (registrosViajesSQL) {
             registrosViajesSQL.forEach(row => {
                 const choferNorm = mapaNombresId[row.chofer_id];
-                if (!choferNorm) return; // Si el ID no existe en el padrón, se ignora
+                if (!choferNorm) return; 
                 
                 if (!nuevaSeccionViajes[choferNorm]) nuevaSeccionViajes[choferNorm] = {};
                 
@@ -199,7 +180,6 @@ async function actualizarCacheDesdeGoogle() {
         if (resDiagGAS && resDiagGAS.habilitaciones) resDiag.habilitaciones = resDiagGAS.habilitaciones;
         if (resDiagGAS && resDiagGAS.certificados) resDiag.certificados = resDiagGAS.certificados;
         
-        // Asignamos la sección ya cruzada e infalible
         resDiag.nuevaSeccionViajes = nuevaSeccionViajes; 
 
         cacheDatosGlobales.diagramas = resDiag;
@@ -207,6 +187,8 @@ async function actualizarCacheDesdeGoogle() {
         cacheDatosGlobales.nombresMesActual = resNombresMes || [];
         cacheDatosGlobales.ultimaActualizacion = new Date().toISOString();
         
+        // 👉 AQUÍ ESTÁ EL LOG RESTAURADO
+        console.log(`✅ Caché global Híbrido actualizado con éxito. (Datos de viajes listos para ${Object.keys(nuevaSeccionViajes).length} choferes)`);
         io.emit('datos_actualizados', cacheDatosGlobales);
 
     } catch (error) {
@@ -222,41 +204,28 @@ app.post('/api/webhook/google', async (req, res) => {
 
     const evento = req.body.evento || 'TODO';
     try {
-        if (evento === 'KM') {
-            flujoEncoladoKM(); 
-        } 
+        if (evento === 'KM') { flujoEncoladoKM(); } 
         else if (evento === 'TD') {
             const nuevosTDs = await fetchSeguro(`${GAS_URL}?action=obtenerTDs`, 'TDs');
             cacheDatosGlobales.tds = nuevosTDs || cacheDatosGlobales.tds;
             cacheDatosGlobales.ultimaActualizacion = new Date().toISOString();
             io.emit('datos_actualizados', cacheDatosGlobales);
             console.log(`✅ Socket emitido tras webhook de TD`);
-        } 
-        else {
-            flujoEncoladoGlobal(); 
-        }
-    } catch (error) {
-        console.error("❌ Error procesando el webhook:", error);
-    }
+        } else { flujoEncoladoGlobal(); }
+    } catch (error) { console.error("❌ Error procesando webhook:", error); }
 });
 
 app.post('/api/webhook/supabase', async (req, res) => {
     const authHeader = req.headers['authorization'];
-    if (authHeader !== `Bearer ${process.env.SUPABASE_WEBHOOK_SECRET || 'Mayo2026'}`) {
-        return res.status(403).json({ error: "No autorizado" });
-    }
-
-    res.json({ success: true, message: "Recibido por Node" }); 
+    if (authHeader !== `Bearer ${process.env.SUPABASE_WEBHOOK_SECRET || 'Mayo2026'}`) return res.status(403).json({ error: "No autorizado" });
+    
+    res.json({ success: true, message: "Recibido" }); 
     const payload = req.body;
 
     try {
         const tablasMonitoreadas = ['choferes', 'units', 'documentos_choferes', 'movimientos', 'estados_diarios', 'registros_viajes_km'];
-        if (tablasMonitoreadas.includes(payload.table)) {
-            flujoEncoladoGlobal(); 
-        }
-    } catch (error) {
-        console.error("❌ Error procesando webhook de Supabase:", error);
-    }
+        if (tablasMonitoreadas.includes(payload.table)) flujoEncoladoGlobal(); 
+    } catch (error) { console.error("❌ Error procesando webhook de Supabase:", error); }
 });
 
 // ==========================================
@@ -273,26 +242,17 @@ app.post('/api/proxy', async (req, res) => {
         if (body && body.action === 'guardarDocumentos') {
             const { nombre, exVen, licVen, certVen } = body;
             const { data: choferData } = await supabase.from('choferes').select('id').ilike('nombre', nombre).single();
-
             if (choferData) {
-                await supabase.from('documentos_choferes').upsert({ 
-                    chofer_id: choferData.id, venc_periodico: exVen || null, venc_licencia: licVen || null, venc_cert_mp: certVen || null
-                }, { onConflict: 'chofer_id' });
+                await supabase.from('documentos_choferes').upsert({ chofer_id: choferData.id, venc_periodico: exVen || null, venc_licencia: licVen || null, venc_cert_mp: certVen || null }, { onConflict: 'chofer_id' });
             }
             fetch(GAS_URL, { method: 'POST', body: JSON.stringify(body) }).catch(() => {});
             return res.json({ success: true, message: "Documentos sincronizados." });
         }
 
         const respuestaGoogle = await fetch(GAS_URL, { method: 'POST', body: JSON.stringify(body) }).then(r => r.json());
-
-        if (body && body.action !== 'login') {
-            flujoEncoladoGlobal(); 
-        }
+        if (body && body.action !== 'login') flujoEncoladoGlobal(); 
         res.json(respuestaGoogle);
-
-    } catch (error) {
-        res.status(500).json({ success: false, error: "Fallo en la DB" });
-    }
+    } catch (error) { res.status(500).json({ success: false, error: "Fallo en la DB" }); }
 });
 
 app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
