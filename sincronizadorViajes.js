@@ -141,4 +141,8 @@ async function sincronizarViajesASupabase(diasHaciaAtras = 3) {
     }
 }
 
-module.exports = { sincronizarViajesASupabase };
+
+// Y reemplázala por esta:
+module.exports = { 
+    sincronizarViajesASupabase: () => sincronizarViajesASupabase(365) 
+};
