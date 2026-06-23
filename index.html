@@ -580,35 +580,23 @@ window.mapearVencimientos = function(patente, jsonVencimientos) {
         return null;
     }
 
-    // 👉 CORRECCIÓN 2: LECTURA HÍBRIDA (KMs reales + Detalle visual)
-    window.obtenerDetalleViajeDia = function(nomChofer, isoDate) {
-        let nLimpio = String(nomChofer || "").trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, ' ');
-        if (!viajesDetalleGlobal || !viajesDetalleGlobal[nLimpio] || !viajesDetalleGlobal[nLimpio][isoDate]) return null;
-        return viajesDetalleGlobal[nLimpio][isoDate];
-    };
-
-    window.obtenerKmDia = function(nomChofer, isoDate) {
+   // 👉 CORRECCIÓN 2: LECTURA HÍBRIDA (KMs reales + Detalle visual)
+window.obtenerDetalleViajeDia = function(nomChofer, isoDate) {
     let nLimpio = String(nomChofer || "").trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, ' ');
-    let kmTotal = 0;
+    if (!viajesDetalleGlobal || !viajesDetalleGlobal[nLimpio] || !viajesDetalleGlobal[nLimpio][isoDate]) return null;
+    return viajesDetalleGlobal[nLimpio][isoDate];
+};
 
-    // Ahora TODO (histórico y detallado) viene unificado en el mismo objeto
+window.obtenerKmDia = function(nomChofer, isoDate) {
     let det = window.obtenerDetalleViajeDia(nomChofer, isoDate);
+    
+    if (!det) return 0;
 
-    if (det) {
-        // 1. Calculamos la suma de los volúmenes (Viajes Nuevos)
-        let kmVolumenes = (parseFloat(det.campo) || 0) + 
-                          (parseFloat(det.liviano) || 0) + 
-                          (parseFloat(det.euro) || 0) + 
-                          (parseFloat(det.infiniaD) || 0);
+    // 🌟 CORRECCIÓN CRÍTICA: Retornamos ÚNICAMENTE el Kilometraje puro (det.km).
+    // Ya no sumamos campo + liviano + euro, porque esos son litros o viajes y pisaban el valor real.
+    let kmReal = parseFloat(det.km) || 0;
 
-        // 2. Extraemos el KM histórico puro (Viajes Viejos)
-        let kmHistorico = parseFloat(det.km) || 0;
-
-        // 3. Tomamos el valor real (Los registros viejos solo tienen 'kmHistorico', los nuevos 'kmVolumenes')
-        kmTotal = kmVolumenes > 0 ? kmVolumenes : kmHistorico;
-    }
-
-    return parseFloat(kmTotal.toFixed(2));
+    return parseFloat(kmReal.toFixed(2));
 };
 
 
