@@ -64,31 +64,49 @@ async function sincronizarViajesASupabase(diasHaciaAtras = 3) {
             if (kmStr) mapaKms = JSON.parse(kmStr);
         }
 
+        // ==============================================================
+        // 4. UNIFICAR ESTRUCTURAS EN UN DICCIONARIO INTERMEDIO
+        // ==============================================================
         const dbRows = {};
 
-        // A) Filtrado de Viajes Detallados
+        // A) Procesar primero los viajes detallados (Fila 12)
         for (let choferNorm in viajesDetalleObj) {
             const choferId = mapaChoferes[normalizar(choferNorm)];
             if (!choferId) continue;
+
             if (!dbRows[choferId]) dbRows[choferId] = {};
 
             for (let fechaIso in viajesDetalleObj[choferNorm]) {
-                // 🛑 EL FILTRO SALVAVIDAS: Si el viaje es viejo, lo ignoramos y no lo mandamos a Supabase
-                if (fechaIso < limiteIso) continue;
-
                 const src = viajesDetalleObj[choferNorm][fechaIso];
+                
+                // Forzar que las hojas de ruta sean un array de strings limpio
+                let arrHR = [];
+                if (src.hoja_ruta) {
+                    arrHR = (Array.isArray(src.hoja_ruta) ? src.hoja_ruta : [src.hoja_ruta])
+                            .map(h => String(h || '').trim())
+                            .filter(Boolean);
+                }
+
                 dbRows[choferId][fechaIso] = {
-                    chofer_id: choferId, fecha: fechaIso, dominio: src.dominio || null,
-                    km: 0, liviano: src.liviano || 0, euro: src.euro || 0,
-                    campo: src.campo || 0, infinia_d: src.infiniaD || 0, hoja_ruta: src.hoja_ruta || []
+                    chofer_id: choferId,
+                    fecha: fechaIso,
+                    // 🛡️ SOLUCIÓN ACORTAR DOMINIO: Evita el error 'value too long' acortándolo a un máximo de 20 caracteres
+                    dominio: src.dominio ? String(src.dominio).trim().substring(0, 20) : null,
+                    km: 0,
+                    liviano: parseFloat(src.liviano) || 0,
+                    euro: parseFloat(src.euro) || 0,
+                    campo: parseFloat(src.campo) || 0,
+                    infinia_d: parseFloat(src.infiniaD) || 0,
+                    hoja_ruta: arrHR
                 };
             }
         }
 
-        // B) Filtrado de Kilómetros
+        // B) Inyectar los Kilómetros de la pestaña api_km
         for (let choferRaw in mapaKms) {
             const choferId = mapaChoferes[normalizar(choferRaw)];
             if (!choferId) continue;
+
             if (!dbRows[choferId]) dbRows[choferId] = {};
 
             mapaKms[choferRaw].forEach(reg => {
@@ -96,16 +114,18 @@ async function sincronizarViajesASupabase(diasHaciaAtras = 3) {
                 if (partes.length === 3) {
                     let fechaIso = `20${partes[2]}-${partes[1].padStart(2, '0')}-${partes[0].padStart(2, '0')}`;
                     
-                    // 🛑 EL FILTRO SALVAVIDAS
-                    if (fechaIso < limiteIso) return;
-
                     if (!dbRows[choferId][fechaIso]) {
                         dbRows[choferId][fechaIso] = {
-                            chofer_id: choferId, fecha: fechaIso, dominio: null, km: 0,
-                            liviano: 0, euro: 0, campo: 0, infinia_d: 0, hoja_ruta: []
+                            chofer_id: choferId,
+                            fecha: fechaIso,
+                            dominio: null,
+                            km: 0,
+                            liviano: 0, euro: 0, campo: 0, infinia_d: 0,
+                            hoja_ruta: []
                         };
                     }
-                    dbRows[choferId][fechaIso].km = reg.km || 0;
+                    // Asignamos el kilometraje real de la pestaña histórica
+                    dbRows[choferId][fechaIso].km = parseFloat(reg.km) || 0;
                 }
             });
         }
