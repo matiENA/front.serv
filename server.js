@@ -128,6 +128,7 @@ async function actualizarCacheDesdeGoogle() {
         const { data: registrosViajesSQL, error: errV } = await supabase
             .from('registros_viajes_km')
             .select('*')
+
             .gte('fecha', fechaLimiteStr);
 
         if (errV) console.error("⚠️ Error leyendo SQL:", errV);
