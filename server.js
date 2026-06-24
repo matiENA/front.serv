@@ -9,7 +9,7 @@ const { JWT } = require('google-auth-library');
 const { createClient } = require('@supabase/supabase-js');
 
 const { sincronizarTractoresContinuo } = require('./sincronizadorFlota'); 
-const { sincronizarViajesASupabase } = require('./sincronizadorViajes'); // (Para micro-sync si alguien toca el Excel)
+const { sincronizarViajesASupabase } = require('./sincronizadorViajes'); 
 
 const app = express();
 const server = http.createServer(app); 
@@ -20,9 +20,8 @@ app.use(express.json({ type: ['application/json', 'text/plain'] }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ==========================================
-// 1. CONFIGURACIÓN 
+// 1. CONFIGURACIÓN E INSTANCIAS
 // ==========================================
-const GAS_URL = process.env.GAS_URL;
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_KEY;
 const supabase = createClient(supabaseUrl, supabaseKey);
@@ -33,16 +32,11 @@ const serviceAccountAuth = new JWT({
     scopes: ['https://www.googleapis.com/auth/spreadsheets'],
 });
 
-let cacheDatosGlobales = { diagramas: null, tds: null, nombresMesActual: [], ultimaActualizacion: null };
+const ID_SPREADSHEET_MASTER = process.env.SPREADSHEET_ID;
+const ID_SPREADSHEET_DIAGRAMAS = '1mhfXpFCF6upMlnRnZjDdBVS_wqTx5q8v0qQArNCnNAU';
+const mesesAbrev = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
 
-const fetchSeguro = async (url) => {
-    try {
-        const r = await fetch(url);
-        const text = await r.text();
-        if (text.trim().startsWith('<')) return null;
-        return JSON.parse(text);
-    } catch (err) { return null; }
-};
+let cacheDatosGlobales = { diagramas: null, tds: null, nombresMesActual: [], ultimaActualizacion: null };
 
 // ==========================================
 // 🛡️ SISTEMA DE COLAS Y WORKERS
@@ -75,54 +69,90 @@ async function flujoEncoladoKM() {
     }
 }
 
-// Iniciar procesos en segundo plano
-setTimeout(() => {
-    sincronizarTractoresContinuo();
-    flujoEncoladoGlobal(); 
-}, 5000); 
-
-setInterval(() => {
-    sincronizarTractoresContinuo();
-}, 5 * 60 * 1000); 
+setTimeout(() => { sincronizarTractoresContinuo(); flujoEncoladoGlobal(); }, 5000); 
+setInterval(() => { sincronizarTractoresContinuo(); }, 5 * 60 * 1000); 
 
 // ==========================================
-// 🧠 2. EL CEREBRO: ENSAMBLADOR EN RAM (SQL -> JSON)
-// ==========================================
-// ==========================================
-// 🧠 2. EL CEREBRO: ENSAMBLADOR EN RAM (SQL -> JSON)
+// 🧠 2. EL CEREBRO: LECTURA DIRECTA (BYPASS GAS)
 // ==========================================
 async function actualizarCacheDesdeGoogle() {
     try {
-        console.log("🔄 Reconstruyendo Memoria RAM (SQL + Google)...");
+        console.log("🔄 Conectando directamente a Google Sheets y Supabase...");
         
-        const [resDiagGAS, resNombresMes, resTDs] = await Promise.all([
-            fetchSeguro(`${GAS_URL}?action=obtenerDiagramasCacheados`),
-            fetchSeguro(`${GAS_URL}?action=obtenerNombresMesActual`),
-            fetchSeguro(`${GAS_URL}?action=obtenerTDs`)
+        const docMaster = new GoogleSpreadsheet(ID_SPREADSHEET_MASTER, serviceAccountAuth);
+        const docDiag = new GoogleSpreadsheet(ID_SPREADSHEET_DIAGRAMAS, serviceAccountAuth);
+        
+        await Promise.all([docMaster.loadInfo(), docDiag.loadInfo()]);
+
+        const sheetCacheBasico = docMaster.sheetsByTitle['API_CACHE_BASICO']; 
+        const sheetNombres = docMaster.sheetsByTitle['API_CACHE_NOMBRES']; 
+        const sheetTDs = docMaster.sheetsByTitle['API_CACHE_TDS']; 
+        const sheetObservaciones = docMaster.sheetsByTitle['OBSERVACIONES']; 
+
+        await Promise.all([
+            sheetCacheBasico ? sheetCacheBasico.loadCells('A1:Z15') : Promise.resolve(),
+            sheetNombres ? sheetNombres.loadCells('A1:Z5') : Promise.resolve(),
+            sheetTDs ? sheetTDs.loadCells('A1:Z15') : Promise.resolve(),
+            sheetObservaciones ? sheetObservaciones.loadCells('A1:Z5') : Promise.resolve()
         ]);
 
-        // 👉 1. TRAEMOS CHOFERES CON SUS DATOS PERSONALES (DNI, Tel, Legajo)
-        const { data: choferes } = await supabase.from('choferes')
-            .select('id, nombre, c_servicio, dni, legajo, telefono, email, units(n_ute, tractor, semi)');
-        
+        const extraerJsonDeFila = (sheet, filaIndex) => {
+            if (!sheet) return null;
+            let strCompleto = '';
+            for (let col = 0; col < 26; col++) {
+                try {
+                    let cell = sheet.getCell(filaIndex, col);
+                    if (cell && cell.value) strCompleto += String(cell.value).replace(/^'/, "");
+                    else break;
+                } catch(e) { break; }
+            }
+            if (!strCompleto) return null;
+            try { return JSON.parse(strCompleto); } catch (e) { return null; }
+        };
+
+        let resDiagGAS = {
+            documentos: extraerJsonDeFila(sheetCacheBasico, 1) || {},
+            habilitaciones: extraerJsonDeFila(sheetCacheBasico, 2) || {},
+            dnis: extraerJsonDeFila(sheetCacheBasico, 3) || {},
+            certificados: extraerJsonDeFila(sheetCacheBasico, 4) || {},
+            telefonos: extraerJsonDeFila(sheetCacheBasico, 5) || {},
+            vencimientosObj: extraerJsonDeFila(sheetCacheBasico, 10) || {},
+            observaciones: extraerJsonDeFila(sheetObservaciones, 0) || {},
+            aptosMedicos: extraerJsonDeFila(sheetObservaciones, 1) || {}
+        };
+        let resTDs = extraerJsonDeFila(sheetTDs, 0) || {};
+
+        // 🧹 Limpieza estática segura
+        try {
+            if (sheetCacheBasico) sheetCacheBasico.resetLocalCache();
+            if (sheetNombres) sheetNombres.resetLocalCache();
+            if (sheetTDs) sheetTDs.resetLocalCache();
+            if (sheetObservaciones) sheetObservaciones.resetLocalCache();
+        } catch (e) {}
+
+        // 👉 1. TRAEMOS CHOFERES DE SUPABASE
+        const { data: choferes } = await supabase.from('choferes').select('*, units(n_ute, tractor, semi)');
         const normalizar = (n) => String(n || '').trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, ' ');
-        
         const mapaNombresId = {};
-        let dnisMap = {};
-        let telefonosMap = {};
+        
+        let docsMap = resDiagGAS.documentos;
+        let habsMap = resDiagGAS.habilitaciones;
+        let certsMap = resDiagGAS.certificados;
+        let dnisMap = resDiagGAS.dnis;
+        let telefonosMap = resDiagGAS.telefonos;
 
         if (choferes) {
             choferes.forEach(c => { 
                 const nomNorm = normalizar(c.nombre);
                 mapaNombresId[c.id] = nomNorm; 
-                
-                // Formateamos DNI y Teléfonos EXACTAMENTE como el Front-End los espera
                 if (c.dni) dnisMap[nomNorm] = { dni: c.dni };
-                telefonosMap[nomNorm] = { 
-                    telefono: c.telefono || '', 
-                    legajo: c.legajo || '', 
-                    email: c.email || '' 
-                };
+                
+                let datosContacto = telefonosMap[nomNorm] || {};
+                if (c.telefono) datosContacto.telefono = c.telefono;
+                if (c.legajo) datosContacto.legajo = c.legajo;
+                if (c.email) datosContacto.email = c.email;
+                telefonosMap[nomNorm] = datosContacto;
+                if (c.dni) telefonosMap[c.dni] = datosContacto;
             });
         }
 
@@ -130,64 +160,120 @@ async function actualizarCacheDesdeGoogle() {
         fechaLimite.setDate(fechaLimite.getDate() - 365); 
         const fechaLimiteStr = fechaLimite.toISOString().split('T')[0];
 
-        // --- LECTURA A: VIAJES (KMs) ---
+        // 👉 2. LECTURA DIRECTA DE DIAGRAMAS (CALENDARIOS DE GOOGLE SHEETS)
+        let diasLegacyIso = {}; 
+        let srvLegacy = {};
+        let visualesLegacyMap = {}; 
+
+        let hoy = new Date();
+        let offsetsMeses = [-1, 0, 1, 2, 3]; 
+        let hojasInfo = [];
+
+        // 🛡️ SOLUCIÓN AL CRASH: Armamos un diccionario estático de las hojas 
+        // ANTES de empezar a vaciarlas de la memoria RAM.
+        const mapaHojasDiag = {};
+        docDiag.sheetsByIndex.forEach(sheet => {
+            try { mapaHojasDiag[sheet.title] = sheet; } catch(e) {}
+        });
+
+       for (let i of offsetsMeses) {
+            let d = new Date(hoy.getFullYear(), hoy.getMonth() + i, 1);
+            let anio = d.getFullYear();
+            let mesStr = String(d.getMonth() + 1).padStart(2, '0');
+            let nombreHoja = mesesAbrev[d.getMonth()] + "-" + String(anio).slice(-2);
+            
+            hojasInfo.push({ nombre: nombreHoja, anio, mesStr });
+            
+            let sheetDiag = mapaHojasDiag[nombreHoja]; 
+            if (!sheetDiag) continue;
+            
+            // 🛡️ LECTOR ELÁSTICO: Intentamos cargar hasta la fila 255. 
+            // Si el mes tiene menos filas y Google lanza error de límites, cargamos solo las dimensiones reales de la hoja.
+            try {
+                await sheetDiag.loadCells('A1:AL255'); 
+            } catch (boundsError) {
+                try { await sheetDiag.loadCells(); } catch(e) { continue; }
+            }
+            
+            // 🚀 BARRIDO: Desde la Fila 6 (index 5) hasta la 254 (index 253)
+            for (let r = 5; r < 254; r++) { 
+                try {
+                    let cellNombre;
+                    
+                    // Si la fila no existe o está vacía, saltamos a la siguiente silenciosamente
+                    try { cellNombre = sheetDiag.getCell(r, 1).value; } catch(err) { continue; } 
+                    
+                    if (!cellNombre || cellNombre === "APELLIDO Y NOMBRE" || cellNombre === "Personal Activo") continue;
+                    
+                    let nomNorm = normalizar(cellNombre);
+                    if (!diasLegacyIso[nomNorm]) diasLegacyIso[nomNorm] = {};
+                    
+                    try {
+                        let srv = sheetDiag.getCell(r, 2).value;
+                        if (srv) srvLegacy[nomNorm] = String(srv).trim();
+                    } catch(err) {}
+                    
+                    // Escaneamos los 31 días protegiendo cada celda individualmente
+                    for (let dia = 1; dia <= 31; dia++) {
+                        try {
+                            let estado = sheetDiag.getCell(r, dia + 3).value;
+                            if (estado && estado !== '-') {
+                                let isoDate = `${anio}-${mesStr}-${String(dia).padStart(2, '0')}`;
+                                diasLegacyIso[nomNorm][isoDate] = String(estado).toUpperCase().trim();
+                            }
+                        } catch(err) {} // Si el día no existe (ej: 31 de Junio), se ignora.
+                    }
+                } catch (e) { 
+                    continue; // Nunca abandonamos el bucle, pasamos al siguiente chofer
+                } 
+            }
+            
+            // 🧹 RAM FREE
+            try { sheetDiag.resetLocalCache(); } catch(e) {}
+        }
+
+        // 👉 3. LECTURA DE SUPABASE (Sobrescribe a Google)
         let registrosViajesSQL = [];
-        let masViajes = true;
-        let pagV = 0;
+        let diagramasSQL = [];
+        let masViajes = true, masDiag = true;
+        let pagV = 0, pagD = 0;
+
         while (masViajes) {
             const { data: chunk } = await supabase.from('registros_viajes_km').select('*').gte('fecha', fechaLimiteStr).range(pagV * 1000, (pagV + 1) * 1000 - 1);
-            if (chunk && chunk.length > 0) { registrosViajesSQL.push(...chunk); pagV++; if (chunk.length < 1000) masViajes = false; } 
-            else { masViajes = false; }
+            if (chunk && chunk.length > 0) { registrosViajesSQL.push(...chunk); pagV++; if (chunk.length < 1000) masViajes = false; } else masViajes = false;
+        }
+
+        while (masDiag) {
+            const { data: chunkD } = await supabase.from('diagramas_diarios').select('*').gte('fecha', fechaLimiteStr).range(pagD * 1000, (pagD + 1) * 1000 - 1);
+            if (chunkD && chunkD.length > 0) { diagramasSQL.push(...chunkD); pagD++; if (chunkD.length < 1000) masDiag = false; } else masDiag = false;
         }
 
         let nuevaSeccionViajes = {};
-        if (registrosViajesSQL.length > 0) {
-            registrosViajesSQL.forEach(row => {
-                const choferNorm = mapaNombresId[row.chofer_id];
-                if (!choferNorm) return; 
-                if (!nuevaSeccionViajes[choferNorm]) nuevaSeccionViajes[choferNorm] = {};
-                const fechaLimpia = String(row.fecha).split('T')[0];
-                nuevaSeccionViajes[choferNorm][fechaLimpia] = {
-                    dominio: row.dominio || '', km: Number(row.km || 0), 
-                    liviano: Number(row.liviano || 0), euro: Number(row.euro || 0),
-                    campo: Number(row.campo || 0), infiniaD: Number(row.infinia_d || 0), 
-                    hoja_ruta: row.hoja_ruta || []
-                };
-            });
-        }
-
-        // --- LECTURA B: DIAGRAMAS DIARIOS (Estados F, V, L) ---
-        let diagramasSQL = [];
-        let masDiag = true;
-        let pagD = 0;
-        while (masDiag) {
-            const { data: chunkD } = await supabase.from('diagramas_diarios').select('*').gte('fecha', fechaLimiteStr).range(pagD * 1000, (pagD + 1) * 1000 - 1);
-            if (chunkD && chunkD.length > 0) { diagramasSQL.push(...chunkD); pagD++; if (chunkD.length < 1000) masDiag = false; } 
-            else { masDiag = false; }
-        }
+        registrosViajesSQL.forEach(row => {
+            const choferNorm = mapaNombresId[row.chofer_id];
+            if (!choferNorm) return; 
+            if (!nuevaSeccionViajes[choferNorm]) nuevaSeccionViajes[choferNorm] = {};
+            const fechaLimpia = String(row.fecha).split('T')[0];
+            nuevaSeccionViajes[choferNorm][fechaLimpia] = {
+                dominio: row.dominio || '', km: Number(row.km || 0), 
+                liviano: Number(row.liviano || 0), euro: Number(row.euro || 0),
+                campo: Number(row.campo || 0), infiniaD: Number(row.infinia_d || 0), hoja_ruta: row.hoja_ruta || []
+            };
+        });
 
         const dictDiasSQL = {};
-        if (diagramasSQL.length > 0) {
-            diagramasSQL.forEach(row => {
-                const choferNorm = mapaNombresId[row.chofer_id];
-                if (!choferNorm) return;
-                if (!dictDiasSQL[choferNorm]) dictDiasSQL[choferNorm] = {};
-                const fechaLimpia = String(row.fecha).split('T')[0];
-                dictDiasSQL[choferNorm][fechaLimpia] = row.estado;
-            });
-        }
+        diagramasSQL.forEach(row => {
+            const choferNorm = mapaNombresId[row.chofer_id];
+            if (!choferNorm) return;
+            if (!dictDiasSQL[choferNorm]) dictDiasSQL[choferNorm] = {};
+            dictDiasSQL[choferNorm][String(row.fecha).split('T')[0]] = row.estado;
+        });
 
-        // 👉 LECTURA C: DOCUMENTOS Y VENCIMIENTOS DESDE SQL ---
         const { data: documentosSQL } = await supabase.from('documentos_choferes').select('*');
-        let docsMap = {};
-        let habsMap = {};
-        let certsMap = {};
-
         if (documentosSQL) {
             documentosSQL.forEach(doc => {
                 const choferNorm = mapaNombresId[doc.chofer_id];
                 if (choferNorm) {
-                    // Mapeamos a la estructura { ven: "YYYY-MM-DD", estado: "OK" }
                     if (doc.venc_periodico) docsMap[choferNorm] = { ven: String(doc.venc_periodico).split('T')[0], estado: 'OK' };
                     if (doc.venc_licencia) habsMap[choferNorm] = { ven: String(doc.venc_licencia).split('T')[0], estado: 'OK' };
                     if (doc.venc_cert_mp) certsMap[choferNorm] = { ven: String(doc.venc_cert_mp).split('T')[0], estado: 'OK' };
@@ -195,70 +281,94 @@ async function actualizarCacheDesdeGoogle() {
             });
         }
 
-        // --- ENSAMBLADO FINAL ---
+        // 👉 4. TRADUCTOR FINAL: Mezcla ISO y conversión a Comas para el FrontEnd
         let diagramasHibridos = [];
+        let choferesProcesados = new Set(); 
+
+        const arrayTDsOriginal = extraerJsonDeFila(sheetCacheBasico, 0) || []; 
+        arrayTDsOriginal.forEach(d => {
+            let n = normalizar(d.nom);
+            visualesLegacyMap[n] = { td: d.td, hex1: d.hex1, hex2: d.hex2, hex_1: d.hex_1, hex_2: d.hex_2 };
+        });
+
         if (choferes) {
-            diagramasHibridos = choferes.map(chofer => {
-                const nomNorm = normalizar(chofer.nombre);
-                return {
-                    _safeId: "drv_" + nomNorm.replace(/[^a-z0-9]/g, "_"), nom: chofer.nombre, 
-                    tractor: chofer.units ? (chofer.units.tractor || '') : '', semi: chofer.units ? (chofer.units.semi || '') : '', 
-                    srv: chofer.c_servicio || '', n_ute: chofer.units ? (chofer.units.n_ute || '') : '', td: '-', 
-                    hex1: "", hex2: "", hex_1: "#ffffff", hex_2: "#ffffff", 
-                    dias: dictDiasSQL[nomNorm] || {} 
-                };
+            choferes.forEach(chofer => {
+                const nombreReal = String(chofer.nombre || '').trim();
+                const nomNorm = normalizar(nombreReal);
+                
+                if (!nombreReal || choferesProcesados.has(nomNorm)) return;
+                choferesProcesados.add(nomNorm);
+
+                let unTractor = '', unSemi = '', unUte = '';
+                if (chofer.units) {
+                    let u = Array.isArray(chofer.units) ? chofer.units[0] : chofer.units;
+                    if (u) { unTractor = u.tractor || ''; unSemi = u.semi || ''; unUte = u.n_ute || ''; }
+                }
+
+                let mergeIso = { ...(diasLegacyIso[nomNorm] || {}), ...(dictDiasSQL[nomNorm] || {}) };
+                let vL = visualesLegacyMap[nomNorm] || {};
+
+                let diasFront = {};
+                hojasInfo.forEach(info => {
+                    let tira = [];
+                    for (let dia = 1; dia <= 31; dia++) {
+                        let isoDate = `${info.anio}-${info.mesStr}-${String(dia).padStart(2, '0')}`;
+                        tira.push(mergeIso[isoDate] || "-");
+                    }
+                    diasFront[info.nombre] = tira.join(",");
+                });
+
+                diagramasHibridos.push({
+                    _safeId: "drv_" + nomNorm.replace(/[^a-z0-9]/g, "_"), 
+                    nom: nombreReal, 
+                    tractor: unTractor, 
+                    semi: unSemi, 
+                    srv: srvLegacy[nomNorm] || chofer.c_servicio || '', 
+                    n_ute: unUte, 
+                    td: vL.td || '-', 
+                    hex1: vL.hex1 || "", hex2: vL.hex2 || "", hex_1: vL.hex_1 || "#ffffff", hex_2: vL.hex_2 || "#ffffff", 
+                    dias: diasFront,       
+                    _diasIso: mergeIso     
+                });
             });
         }
 
-        // 🚀 EL OBJETO MÁGICO: Aquí inyectamos SQL fingiendo que es el JSON viejo
         let resDiag = { 
-            diagramas: diagramasHibridos, 
-            nuevaSeccionViajes,
-            documentos: docsMap,       // Viene de SQL
-            habilitaciones: habsMap,   // Viene de SQL
-            certificados: certsMap,    // Viene de SQL
-            dnis: dnisMap,             // Viene de SQL
-            telefonos: telefonosMap    // Viene de SQL
+            diagramas: diagramasHibridos, nuevaSeccionViajes,
+            documentos: docsMap, habilitaciones: habsMap, certificados: certsMap,
+            dnis: dnisMap, telefonos: telefonosMap,
+            observaciones: resDiagGAS.observaciones, aptosMedicos: resDiagGAS.aptosMedicos, vencimientosObj: resDiagGAS.vencimientosObj
         };
 
-        // 🚧 Mantenemos el Historial de Observaciones, Aptos Médicos y Vencimiento Unidades
-        // desde Google Sheets HASTA que decidas migrar esas tablas a SQL.
-        if (resDiagGAS && resDiagGAS.observaciones) resDiag.observaciones = resDiagGAS.observaciones;
-        if (resDiagGAS && resDiagGAS.aptosMedicos) resDiag.aptosMedicos = resDiagGAS.aptosMedicos;
-        if (resDiagGAS && resDiagGAS.vencimientosObj) resDiag.vencimientosObj = resDiagGAS.vencimientosObj;
-        if (resDiagGAS && resDiagGAS.fotosImgur) resDiag.fotosImgur = resDiagGAS.fotosImgur;
-
         cacheDatosGlobales.diagramas = resDiag;
-        cacheDatosGlobales.tds = resTDs || cacheDatosGlobales.tds || {};
-        cacheDatosGlobales.nombresMesActual = resNombresMes || [];
+        cacheDatosGlobales.tds = resTDs;
         cacheDatosGlobales.ultimaActualizacion = new Date().toISOString();
         
         io.emit('datos_actualizados', cacheDatosGlobales);
-        console.log(`✅ RAM lista y Sockets emitidos.`);
-    } catch (error) { console.error("❌ Error en ensamblador:", error); }
+        console.log(`✅ Traductor de RAM listo y limpio. Sockets emitidos.`);
+    } catch (error) { console.error("❌ Error en ensamblador directo:", error); }
+}
+
+function obtenerInfoHojaDesdeIso(isoDate) {
+    let d = new Date(isoDate + "T12:00:00");
+    let anio = d.getFullYear();
+    let mesStr = String(d.getMonth() + 1).padStart(2, '0');
+    let nombreHoja = mesesAbrev[d.getMonth()] + "-" + String(anio).slice(-2);
+    return { nombre: nombreHoja, anio, mesStr };
 }
 
 // ==========================================
-// 🔔 3. RECEPTORES DE WEBHOOKS (SOLO DESDE GOOGLE SHEETS)
+// 🔔 3. RECEPTORES DE WEBHOOKS
 // ==========================================
 app.post('/api/webhook/google', async (req, res) => {
     res.json({ success: true, message: "Recibido" }); 
     const evento = req.body.evento || 'TODO';
-    
-    if (evento === 'KM') {
-        flujoEncoladoKM(); // Micro-sync por si tocan el Excel a mano
-    } else if (evento === 'TD') {
-        const nuevosTDs = await fetchSeguro(`${GAS_URL}?action=obtenerTDs`);
-        cacheDatosGlobales.tds = nuevosTDs || cacheDatosGlobales.tds;
-        cacheDatosGlobales.ultimaActualizacion = new Date().toISOString();
-        io.emit('datos_actualizados', cacheDatosGlobales);
-    } else { 
-        flujoEncoladoGlobal(); 
-    }
+    if (evento === 'KM') flujoEncoladoKM();
+    else flujoEncoladoGlobal(); 
 });
 
 // ==========================================
-// 🌟 4. RUTAS API Y PROXY (ESCRITURA DIRECTA)
+// 🌟 4. RUTAS API Y PROXY (MUTACIÓN ISO + FRONTEND)
 // ==========================================
 app.get('/api/datos', (req, res) => {
     if (!cacheDatosGlobales.diagramas) return res.status(503).json({ error: "Cargando DB..." });
@@ -268,18 +378,26 @@ app.get('/api/datos', (req, res) => {
 app.post('/api/proxy', async (req, res) => {
     try {
         const body = req.body;
-        let huboCambios = false; // 🚩 Bandera para disparar el Socket al final
+        let huboCambios = false;
+        const normalizar = (n) => String(n || '').trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, ' ');
 
-        // A. DOCUMENTOS
         if (body && body.action === 'guardarDocumentos') {
             const { data: choferData } = await supabase.from('choferes').select('id').ilike('nombre', body.nombre).single();
             if (choferData) {
                 await supabase.from('documentos_choferes').upsert({ chofer_id: choferData.id, venc_periodico: body.exVen, venc_licencia: body.licVen, venc_cert_mp: body.certVen }, { onConflict: 'chofer_id' });
+                
+                let choferNorm = normalizar(body.nombre);
+                if (!cacheDatosGlobales.diagramas.documentos) cacheDatosGlobales.diagramas.documentos = {};
+                if (!cacheDatosGlobales.diagramas.habilitaciones) cacheDatosGlobales.diagramas.habilitaciones = {};
+                if (!cacheDatosGlobales.diagramas.certificados) cacheDatosGlobales.diagramas.certificados = {};
+                
+                if (body.exVen) cacheDatosGlobales.diagramas.documentos[choferNorm] = { ven: body.exVen, estado: 'OK' };
+                if (body.licVen) cacheDatosGlobales.diagramas.habilitaciones[choferNorm] = { ven: body.licVen, estado: 'OK' };
+                if (body.certVen) cacheDatosGlobales.diagramas.certificados[choferNorm] = { ven: body.certVen, estado: 'OK' };
+                huboCambios = true;
             }
-            huboCambios = true;
         }
 
-        // B. VIAJES Y KMs
         if (body && (body.action === 'guardarHojasRuta' || body.action === 'guardarViaje' || body.action === 'actualizarViaje' || body.hoja_ruta !== undefined || body.km !== undefined)) {
             const nomChofer = body.nombre || body.nom || body.chofer;
             const fechaViaje = body.fecha || body.isoDate;
@@ -299,103 +417,95 @@ app.post('/api/proxy', async (req, res) => {
                         hoja_ruta: body.hoja_ruta !== undefined ? body.hoja_ruta : (viajeExistente?.hoja_ruta || []),
                         actualizado_en: new Date()
                     }, { onConflict: 'chofer_id,fecha' });
+
+                    let choferNorm = normalizar(nomChofer);
+                    if (!cacheDatosGlobales.diagramas.nuevaSeccionViajes) cacheDatosGlobales.diagramas.nuevaSeccionViajes = {};
+                    if (!cacheDatosGlobales.diagramas.nuevaSeccionViajes[choferNorm]) cacheDatosGlobales.diagramas.nuevaSeccionViajes[choferNorm] = {};
+                    
+                    let vEx = cacheDatosGlobales.diagramas.nuevaSeccionViajes[choferNorm][fechaViaje] || {};
+                    cacheDatosGlobales.diagramas.nuevaSeccionViajes[choferNorm][fechaViaje] = {
+                        dominio: body.dominio !== undefined ? body.dominio : (vEx.dominio || ''), km: body.km !== undefined ? Number(body.km) : (vEx.km || 0),
+                        liviano: body.liviano !== undefined ? Number(body.liviano) : (vEx.liviano || 0), euro: body.euro !== undefined ? Number(body.euro) : (vEx.euro || 0),
+                        campo: body.campo !== undefined ? Number(body.campo) : (vEx.campo || 0), infiniaD: body.infinia_d !== undefined ? Number(body.infinia_d) : (vEx.infiniaD || 0),
+                        hoja_ruta: body.hoja_ruta !== undefined ? body.hoja_ruta : (vEx.hoja_ruta || [])
+                    };
                     huboCambios = true;
                 }
             }
         }
 
-   // C. 🌟 DIAGRAMAS (Maneja Rangos, Arrays y Días Individuales)
         if (body && body.action === 'actualizarEstado') {
-            const nomChofer = body.nombre;
-            const startIso = body.startIso;
-            const endIso = body.endIso;
-            const estPayload = body.est; // Puede ser un string ('F') o un Array (['1', '2', '3'])
+            const nomChofer = body.nombre; const startIso = body.startIso; const endIso = body.endIso; const estPayload = body.est;
 
             if (nomChofer && startIso && endIso) {
                 const { data: choferData } = await supabase.from('choferes').select('id').ilike('nombre', nomChofer).single();
                 
                 if (choferData) {
-                    let dStart = new Date(startIso + "T12:00:00");
-                    let dEnd = new Date(endIso + "T12:00:00");
-                    let current = new Date(dStart);
-                    let dayIndex = 0;
+                    let dStart = new Date(startIso + "T12:00:00"); let dEnd = new Date(endIso + "T12:00:00");
+                    let current = new Date(dStart); let dayIndex = 0; let arrayParaUpsert = [];
 
-                    let arrayParaUpsert = [];
+                    let choferNorm = normalizar(nomChofer);
+                    let idxChoferRAM = cacheDatosGlobales.diagramas.diagramas ? cacheDatosGlobales.diagramas.diagramas.findIndex(d => normalizar(d.nom) === choferNorm) : -1;
+                    let mesesAfectados = new Set();
 
-                    // Recorremos el rango de fechas seleccionado
                     while (current <= dEnd) {
                         let fechaDia = current.toISOString().split('T')[0];
-                        let estadoDia;
+                        let estadoDia = Array.isArray(estPayload) ? (estPayload[dayIndex] || '') : estPayload;
 
-                        // Si el front manda una secuencia de números (ej: OPERATIVO), sacamos el valor del Array
-                        if (Array.isArray(estPayload)) {
-                            estadoDia = estPayload[dayIndex] || '';
-                        } else {
-                            estadoDia = estPayload; // Si es 'F', 'V', aplica a todos los días
-                        }
+                        let infoHoja = obtenerInfoHojaDesdeIso(fechaDia);
+                        mesesAfectados.add(infoHoja);
 
                         if (estadoDia === 'BORRAR' || estadoDia === '' || estadoDia === null || estadoDia === '-') {
-                            // Borramos ese día específico
                             await supabase.from('diagramas_diarios').delete().match({ chofer_id: choferData.id, fecha: fechaDia });
+                            if (idxChoferRAM !== -1 && cacheDatosGlobales.diagramas.diagramas[idxChoferRAM]._diasIso) {
+                                delete cacheDatosGlobales.diagramas.diagramas[idxChoferRAM]._diasIso[fechaDia];
+                            }
                         } else {
-                            // Preparamos para inyectar en lote
-                            arrayParaUpsert.push({
-                                chofer_id: choferData.id, 
-                                fecha: fechaDia, 
-                                estado: String(estadoDia).toUpperCase().trim(), 
-                                actualizado_en: new Date()
-                            });
+                            let limpio = String(estadoDia).toUpperCase().trim();
+                            arrayParaUpsert.push({ chofer_id: choferData.id, fecha: fechaDia, estado: limpio, actualizado_en: new Date() });
+                            if (idxChoferRAM !== -1) {
+                                if (!cacheDatosGlobales.diagramas.diagramas[idxChoferRAM]._diasIso) cacheDatosGlobales.diagramas.diagramas[idxChoferRAM]._diasIso = {};
+                                cacheDatosGlobales.diagramas.diagramas[idxChoferRAM]._diasIso[fechaDia] = limpio;
+                            }
                         }
-
-                        current.setDate(current.getDate() + 1);
-                        dayIndex++;
+                        current.setDate(current.getDate() + 1); dayIndex++;
                     }
 
-                    // Inyectamos todo el lote de golpe en Supabase (Ultra rápido)
-                    if (arrayParaUpsert.length > 0) {
-                        await supabase.from('diagramas_diarios').upsert(arrayParaUpsert, { onConflict: 'chofer_id,fecha' });
+                    if (arrayParaUpsert.length > 0) await supabase.from('diagramas_diarios').upsert(arrayParaUpsert, { onConflict: 'chofer_id,fecha' });
+
+                    if (idxChoferRAM !== -1) {
+                        mesesAfectados.forEach(info => {
+                            let tira = [];
+                            for(let d=1; d<=31; d++){
+                                let isoD = `${info.anio}-${info.mesStr}-${String(d).padStart(2,'0')}`;
+                                tira.push(cacheDatosGlobales.diagramas.diagramas[idxChoferRAM]._diasIso[isoD] || "-");
+                            }
+                            cacheDatosGlobales.diagramas.diagramas[idxChoferRAM].dias[info.nombre] = tira.join(",");
+                        });
                     }
-                    
                     huboCambios = true;
                 }
             }
         }
 
-        // =========================================================
-        // 🚧 MÓDULO AISLADO: RÉPLICA EN GOOGLE SHEETS (LEGACY)
-        // =========================================================
-        
-        // 🚩 Cambiar a 'true' si algún día necesitas que la web vuelva a escribir en Excel
         const REPLICAR_EN_GOOGLE = false; 
-
-        // Respuesta simulada inmediata para que la Web no se quede esperando
         let respuestaFrontend = { success: true, message: "Guardado rápido en SQL" };
 
         if (REPLICAR_EN_GOOGLE) {
-            try {
-                // Esta línea bloqueaba el sistema por 3 segundos. Ahora está en cuarentena.
-                respuestaFrontend = await fetch(GAS_URL, { method: 'POST', body: JSON.stringify(body) }).then(r => r.json());
-            } catch (err) {
-                console.error("⚠️ Fallo en la réplica de Google Sheets:", err.message);
-            }
+            try { respuestaFrontend = await fetch(GAS_URL, { method: 'POST', body: JSON.stringify(body) }).then(r => r.json()); } 
+            catch (err) { console.error("⚠️ Fallo en la réplica:", err.message); }
         }
 
-        // =========================================================
-        // 🚀 EMITIR CAMBIOS Y RESPONDER A LA WEB AL INSTANTE
-        // =========================================================
-        
         if (body && body.action !== 'login' && huboCambios) {
-            flujoEncoladoGlobal(); // Dispara la recarga en RAM de Render y emite a los demás usuarios
+            cacheDatosGlobales.ultimaActualizacion = new Date().toISOString();
+            io.emit('datos_actualizados', cacheDatosGlobales); 
         }
 
-        // Devolvemos la respuesta al usuario en < 0.1 segundos
-        res.json(respuestaFrontend);
+        res.json({ success: true, message: "Guardado en SQL y RAM actualizada." });
 
-    } catch (error) { 
-        res.status(500).json({ success: false, error: "Fallo general en Proxy SQL" }); 
-    }
+    } catch (error) { console.error(error); res.status(500).json({ success: false, error: "Fallo general en Proxy" }); }
 });
 
 app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`🚀 Servidor Central SQL Activo en puerto ${PORT}`));
+server.listen(PORT, () => console.log(`🚀 Servidor Central Node Activo en puerto ${PORT}`));
