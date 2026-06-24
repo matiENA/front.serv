@@ -9,7 +9,6 @@ const { JWT } = require('google-auth-library');
 const { createClient } = require('@supabase/supabase-js');
 
 const { sincronizarTractoresContinuo } = require('./sincronizadorFlota'); 
-const { sincronizarViajesASupabase } = require('./sincronizadorViajes'); 
 
 const app = express();
 const server = http.createServer(app); 
@@ -54,34 +53,30 @@ async function flujoEncoladoGlobal() {
     }
 }
 
-let ejecutandoKM = false;
-let pendienteKM = false;
+// 🚀 ARRANQUE INICIAL
+setTimeout(() => { 
+    sincronizarTractoresContinuo(); 
+    flujoEncoladoGlobal(); 
+}, 5000); 
 
-async function flujoEncoladoKM() {
-    if (ejecutandoKM) { pendienteKM = true; return; }
-    ejecutandoKM = true;
-    try {
-        await sincronizarViajesASupabase(2);
-        await actualizarCacheDesdeGoogle();
-    } finally {
-        ejecutandoKM = false;
-        if (pendienteKM) { pendienteKM = false; flujoEncoladoKM(); }
+setInterval(async () => { 
+    const flotaCambio = await sincronizarTractoresContinuo(); 
+    if (flotaCambio) {
+        console.log("🔄 Se actualizaron tractores en DB. Forzando recarga de RAM...");
+        flujoEncoladoGlobal(); 
     }
-}
-
-setTimeout(() => { sincronizarTractoresContinuo(); flujoEncoladoGlobal(); }, 5000); 
-setInterval(() => { sincronizarTractoresContinuo(); }, 5 * 60 * 1000); 
+}, 5 * 60 * 1000); 
 
 // ==========================================
-// 🧠 2. EL CEREBRO: LECTURA DIRECTA (BYPASS GAS)
+// 🧠 2. EL CEREBRO: SINCRONIZACIÓN TOTAL (SHEETS + SUPABASE)
 // ==========================================
 async function actualizarCacheDesdeGoogle() {
     try {
-        console.log("🔄 Conectando directamente a Google Sheets y Supabase...");
+        console.log("🔄 Sincronizando datos: Google Sheets + Supabase...");
         
         const docMaster = new GoogleSpreadsheet(ID_SPREADSHEET_MASTER, serviceAccountAuth);
         const docDiag = new GoogleSpreadsheet(ID_SPREADSHEET_DIAGRAMAS, serviceAccountAuth);
-        
+
         await Promise.all([docMaster.loadInfo(), docDiag.loadInfo()]);
 
         const sheetCacheBasico = docMaster.sheetsByTitle['API_CACHE_BASICO']; 
@@ -111,6 +106,7 @@ async function actualizarCacheDesdeGoogle() {
         };
 
         let resDiagGAS = {
+            diagramas: extraerJsonDeFila(sheetCacheBasico, 0) || [],
             documentos: extraerJsonDeFila(sheetCacheBasico, 1) || {},
             habilitaciones: extraerJsonDeFila(sheetCacheBasico, 2) || {},
             dnis: extraerJsonDeFila(sheetCacheBasico, 3) || {},
@@ -122,7 +118,6 @@ async function actualizarCacheDesdeGoogle() {
         };
         let resTDs = extraerJsonDeFila(sheetTDs, 0) || {};
 
-        // 🧹 Limpieza estática segura
         try {
             if (sheetCacheBasico) sheetCacheBasico.resetLocalCache();
             if (sheetNombres) sheetNombres.resetLocalCache();
@@ -130,9 +125,10 @@ async function actualizarCacheDesdeGoogle() {
             if (sheetObservaciones) sheetObservaciones.resetLocalCache();
         } catch (e) {}
 
+        const normalizar = (n) => String(n || '').trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, ' ');
+
         // 👉 1. TRAEMOS CHOFERES DE SUPABASE
         const { data: choferes } = await supabase.from('choferes').select('*, units(n_ute, tractor, semi)');
-        const normalizar = (n) => String(n || '').trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, ' ');
         const mapaNombresId = {};
         
         let docsMap = resDiagGAS.documentos;
@@ -160,7 +156,7 @@ async function actualizarCacheDesdeGoogle() {
         fechaLimite.setDate(fechaLimite.getDate() - 365); 
         const fechaLimiteStr = fechaLimite.toISOString().split('T')[0];
 
-        // 👉 2. LECTURA DIRECTA DE DIAGRAMAS (CALENDARIOS DE GOOGLE SHEETS)
+        // 👉 2. LEEMOS LOS CALENDARIOS DE GOOGLE SHEETS
         let diasLegacyIso = {}; 
         let srvLegacy = {};
         let visualesLegacyMap = {}; 
@@ -169,14 +165,12 @@ async function actualizarCacheDesdeGoogle() {
         let offsetsMeses = [-1, 0, 1, 2, 3]; 
         let hojasInfo = [];
 
-        // 🛡️ SOLUCIÓN AL CRASH: Armamos un diccionario estático de las hojas 
-        // ANTES de empezar a vaciarlas de la memoria RAM.
         const mapaHojasDiag = {};
         docDiag.sheetsByIndex.forEach(sheet => {
             try { mapaHojasDiag[sheet.title] = sheet; } catch(e) {}
         });
 
-       for (let i of offsetsMeses) {
+        for (let i of offsetsMeses) {
             let d = new Date(hoy.getFullYear(), hoy.getMonth() + i, 1);
             let anio = d.getFullYear();
             let mesStr = String(d.getMonth() + 1).padStart(2, '0');
@@ -187,22 +181,13 @@ async function actualizarCacheDesdeGoogle() {
             let sheetDiag = mapaHojasDiag[nombreHoja]; 
             if (!sheetDiag) continue;
             
-            // 🛡️ LECTOR ELÁSTICO: Intentamos cargar hasta la fila 255. 
-            // Si el mes tiene menos filas y Google lanza error de límites, cargamos solo las dimensiones reales de la hoja.
-            try {
-                await sheetDiag.loadCells('A1:AL255'); 
-            } catch (boundsError) {
-                try { await sheetDiag.loadCells(); } catch(e) { continue; }
-            }
+            try { await sheetDiag.loadCells('A1:AL255'); } 
+            catch (boundsError) { try { await sheetDiag.loadCells(); } catch(e) { continue; } }
             
-            // 🚀 BARRIDO: Desde la Fila 6 (index 5) hasta la 254 (index 253)
             for (let r = 5; r < 254; r++) { 
                 try {
                     let cellNombre;
-                    
-                    // Si la fila no existe o está vacía, saltamos a la siguiente silenciosamente
                     try { cellNombre = sheetDiag.getCell(r, 1).value; } catch(err) { continue; } 
-                    
                     if (!cellNombre || cellNombre === "APELLIDO Y NOMBRE" || cellNombre === "Personal Activo") continue;
                     
                     let nomNorm = normalizar(cellNombre);
@@ -213,7 +198,6 @@ async function actualizarCacheDesdeGoogle() {
                         if (srv) srvLegacy[nomNorm] = String(srv).trim();
                     } catch(err) {}
                     
-                    // Escaneamos los 31 días protegiendo cada celda individualmente
                     for (let dia = 1; dia <= 31; dia++) {
                         try {
                             let estado = sheetDiag.getCell(r, dia + 3).value;
@@ -221,18 +205,14 @@ async function actualizarCacheDesdeGoogle() {
                                 let isoDate = `${anio}-${mesStr}-${String(dia).padStart(2, '0')}`;
                                 diasLegacyIso[nomNorm][isoDate] = String(estado).toUpperCase().trim();
                             }
-                        } catch(err) {} // Si el día no existe (ej: 31 de Junio), se ignora.
+                        } catch(err) {} 
                     }
-                } catch (e) { 
-                    continue; // Nunca abandonamos el bucle, pasamos al siguiente chofer
-                } 
+                } catch (e) { continue; } 
             }
-            
-            // 🧹 RAM FREE
             try { sheetDiag.resetLocalCache(); } catch(e) {}
         }
 
-        // 👉 3. LECTURA DE SUPABASE (Sobrescribe a Google)
+        // 👉 3. LEEMOS SUPABASE (Para no perder viajes web y diagramas web)
         let registrosViajesSQL = [];
         let diagramasSQL = [];
         let masViajes = true, masDiag = true;
@@ -281,11 +261,11 @@ async function actualizarCacheDesdeGoogle() {
             });
         }
 
-        // 👉 4. TRADUCTOR FINAL: Mezcla ISO y conversión a Comas para el FrontEnd
+        // 👉 4. TRADUCTOR FINAL: Mezcla ISO y conversión a Comas
         let diagramasHibridos = [];
         let choferesProcesados = new Set(); 
 
-        const arrayTDsOriginal = extraerJsonDeFila(sheetCacheBasico, 0) || []; 
+        const arrayTDsOriginal = resDiagGAS.diagramas || []; 
         arrayTDsOriginal.forEach(d => {
             let n = normalizar(d.nom);
             visualesLegacyMap[n] = { td: d.td, hex1: d.hex1, hex2: d.hex2, hex_1: d.hex_1, hex_2: d.hex_2 };
@@ -333,19 +313,18 @@ async function actualizarCacheDesdeGoogle() {
             });
         }
 
-        let resDiag = { 
+        cacheDatosGlobales.diagramas = { 
             diagramas: diagramasHibridos, nuevaSeccionViajes,
             documentos: docsMap, habilitaciones: habsMap, certificados: certsMap,
             dnis: dnisMap, telefonos: telefonosMap,
             observaciones: resDiagGAS.observaciones, aptosMedicos: resDiagGAS.aptosMedicos, vencimientosObj: resDiagGAS.vencimientosObj
         };
 
-        cacheDatosGlobales.diagramas = resDiag;
         cacheDatosGlobales.tds = resTDs;
         cacheDatosGlobales.ultimaActualizacion = new Date().toISOString();
         
         io.emit('datos_actualizados', cacheDatosGlobales);
-        console.log(`✅ Traductor de RAM listo y limpio. Sockets emitidos.`);
+        console.log(`✅ Sincronización completa. Sockets emitidos.`);
     } catch (error) { console.error("❌ Error en ensamblador directo:", error); }
 }
 
@@ -362,9 +341,8 @@ function obtenerInfoHojaDesdeIso(isoDate) {
 // ==========================================
 app.post('/api/webhook/google', async (req, res) => {
     res.json({ success: true, message: "Recibido" }); 
-    const evento = req.body.evento || 'TODO';
-    if (evento === 'KM') flujoEncoladoKM();
-    else flujoEncoladoGlobal(); 
+    // 🔥 Ahora ante cualquier evento disparamos la lectura global
+    flujoEncoladoGlobal(); 
 });
 
 // ==========================================
@@ -489,11 +467,10 @@ app.post('/api/proxy', async (req, res) => {
         }
 
         const REPLICAR_EN_GOOGLE = false; 
-        let respuestaFrontend = { success: true, message: "Guardado rápido en SQL" };
 
         if (REPLICAR_EN_GOOGLE) {
-            try { respuestaFrontend = await fetch(GAS_URL, { method: 'POST', body: JSON.stringify(body) }).then(r => r.json()); } 
-            catch (err) { console.error("⚠️ Fallo en la réplica:", err.message); }
+            try { await fetch(GAS_URL, { method: 'POST', body: JSON.stringify(body) }); } 
+            catch (err) {}
         }
 
         if (body && body.action !== 'login' && huboCambios) {
@@ -508,4 +485,4 @@ app.post('/api/proxy', async (req, res) => {
 
 app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`🚀 Servidor Central Node Activo en puerto ${PORT}`));
+server.listen(PORT, () => console.log(`🚀 Servidor Node Activo en puerto ${PORT}`));
