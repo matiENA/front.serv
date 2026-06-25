@@ -3025,8 +3025,7 @@ async function enviarCambioEstado(chofer, fIni, fFin, estado) {
 
 <script src="/socket.io/socket.io.js"></script>
   
-  <script>
-    // 2. Nos conectamos al servidor en tiempo real
+<script>
     // 2. Nos conectamos al servidor en tiempo real
     const socket = io();
     
@@ -3084,42 +3083,41 @@ async function enviarCambioEstado(chofer, fIni, fFin, estado) {
                 viajesDetalleGlobal = {};
             }
 
-            // --- PASO 2: RENDERIZADO INTELIGENTE (Agrupado y sincronizado con GPU) ---
+            // --- PASO 2: RENDERIZADO INTELIGENTE (Agrupado por Debounce) ---
             clearTimeout(debounceSocketTimer); // Cancelamos dibujos atrasados
             
+            // Subimos a 150ms y quitamos el requestAnimationFrame para evitar el warning [Violation]
             debounceSocketTimer = setTimeout(() => {
-                // Le pedimos permiso a la Tarjeta Gráfica para redibujar sin trabar el mouse
-                requestAnimationFrame(() => {
-                    const isInputFocused = document.activeElement && ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName);
-                    const isModalOpen = !document.getElementById('modal-editor').classList.contains('hidden');
-                    const isRangeSelected = typeof seleccionInicioIso !== 'undefined' && seleccionInicioIso !== null;
+                
+                const isInputFocused = document.activeElement && ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName);
+                const isModalOpen = !document.getElementById('modal-editor').classList.contains('hidden');
+                const isRangeSelected = typeof seleccionInicioIso !== 'undefined' && seleccionInicioIso !== null;
 
-                    if (!isInputFocused && !isModalOpen) {
-                        if (!isRangeSelected) {
-                            filtrarTabla(); // Se ejecuta UNA sola vez de forma fluida
-                        } else if (typeof conductorSeleccionadoId !== 'undefined' && conductorSeleccionadoId) {
-                            if (typeof ejecutarRenderLocalHR === 'function') ejecutarRenderLocalHR(conductorSeleccionadoId);
-                        }
+                if (!isInputFocused && !isModalOpen) {
+                    if (!isRangeSelected) {
+                        filtrarTabla(); // Se ejecuta UNA sola vez de forma fluida
+                    } else if (typeof conductorSeleccionadoId !== 'undefined' && conductorSeleccionadoId) {
+                        if (typeof ejecutarRenderLocalHR === 'function') ejecutarRenderLocalHR(conductorSeleccionadoId);
                     }
+                }
 
-                    // Mini-aviso visual (Cambia el punto verde a azul indicando actualización)
-                    let indicator = document.querySelector('.bg-green-500.animate-pulse');
-                    if (indicator) {
-                        indicator.classList.remove('bg-green-500');
-                        indicator.classList.add('bg-blue-500'); 
-                        setTimeout(() => {
-                            indicator.classList.remove('bg-blue-500');
-                            indicator.classList.add('bg-green-500');
-                        }, 500);
-                    }
-                });
-            }, 100); // Agrupa todos los sockets recibidos en los últimos 100ms
+                // Mini-aviso visual (Cambia el punto verde a azul indicando actualización)
+                let indicator = document.querySelector('.bg-green-500.animate-pulse');
+                if (indicator) {
+                    indicator.classList.remove('bg-green-500');
+                    indicator.classList.add('bg-blue-500'); 
+                    setTimeout(() => {
+                        indicator.classList.remove('bg-blue-500');
+                        indicator.classList.add('bg-green-500');
+                    }, 500);
+                }
+                
+            }, 150); 
 
         } catch (e) { 
             console.warn("Error procesando sockets:", e);
         }
     });
   </script>
-
 </body>
 </html>
