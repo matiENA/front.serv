@@ -9,7 +9,6 @@ const { GoogleSpreadsheet } = require('google-spreadsheet');
 const { JWT } = require('google-auth-library');
 const { createClient } = require('@supabase/supabase-js');
 
-
 const app = express();
 app.use(compression()); 
 
@@ -18,7 +17,6 @@ const io = new Server(server, { cors: { origin: "*" } });
 
 app.use(cors());
 app.use(express.json({ type: ['application/json', 'text/plain'] }));
-app.use(express.static(path.join(__dirname, 'public')));
 
 // ==========================================
 // 1. CONFIGURACIÓN E INSTANCIAS
@@ -43,23 +41,34 @@ const mesesAbrev = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep
 let cacheDatosGlobales = { diagramas: null, tds: null, nombresMesActual: [], ultimaActualizacion: null };
 
 // ==========================================
+// 🛡️ LECTOR ULTRALIVIANO (Evita Crash de RAM)
+// ==========================================
+async function fetchRango(spreadsheetId, rango) {
+    try {
+        const url = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(rango)}`;
+        const res = await serviceAccountAuth.request({ url });
+        return res.data.values || [];
+    } catch (e) {
+        console.warn(`⚠️ Error leyendo rango ${rango}:`, e.message);
+        return [];
+    }
+}
+
+// ==========================================
 // 🛡️ SISTEMA DE COLAS INTELIGENTE
 // ==========================================
 let ejecutandoGlobal = false;
 let pendienteGlobal = false;
-let necesitaArranqueProfundo = true; // Iniciamos asumiendo que necesitamos arrancar
+let necesitaArranqueProfundo = true; 
 
 async function flujoEncoladoGlobal(esArranque = false) {
     if (esArranque) necesitaArranqueProfundo = true;
-
     if (ejecutandoGlobal) { pendienteGlobal = true; return; }
     ejecutandoGlobal = true;
 
     try { 
-        // 🌟 REGLA DE ORO: Si la RAM está vacía, SIEMPRE forzamos el arranque profundo
         let hacerArranque = necesitaArranqueProfundo || cacheDatosGlobales.diagramas === null;
-        necesitaArranqueProfundo = false; // Reseteamos la bandera
-
+        necesitaArranqueProfundo = false; 
         await actualizarCacheDesdeGoogle(hacerArranque); 
     } 
     finally {
@@ -71,18 +80,18 @@ async function flujoEncoladoGlobal(esArranque = false) {
     }
 }
 
-// 🚀 ARRANQUE INICIAL
+// 🚀 ARRANQUE INICIAL (Se inicia casi al instante)
 setTimeout(() => { 
     console.log("⏳ [Boot] Disparando evento inicial...");
     flujoEncoladoGlobal(true); 
-}, 8000); 
+}, 3000); 
 
 // ==========================================
-// 🧠 2. EL CEREBRO: CONSTRUCCIÓN NATIVA EN RAM 
+// 🧠 2. EL CEREBRO: CONSTRUCCIÓN NATIVA (API RAW)
 // ==========================================
 async function actualizarCacheDesdeGoogle(esArranque = false) {
     try {
-        console.log(esArranque ? "🚀 ARRANQUE: Procesando cascada completa de datos..." : "⚡ WEBHOOK: Actualizando RAM de forma ligera...");
+        console.log(esArranque ? "🚀 ARRANQUE: Descarga Cruda (RAM Protegida)..." : "⚡ WEBHOOK: Actualizando RAM ligera...");
         const normalizar = (n) => String(n || '').trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, ' ');
 
         let resDiagGAS = {
@@ -90,149 +99,104 @@ async function actualizarCacheDesdeGoogle(esArranque = false) {
             fotosImgur: cacheDatosGlobales.diagramas?.fotosImgur || {},
             observaciones: cacheDatosGlobales.diagramas?.observaciones || {},
             aptosMedicos: cacheDatosGlobales.diagramas?.aptosMedicos || {},
-            flota: {} 
+            documentos: {}, habilitaciones: {}, dnis: {}, certificados: {}, telefonos: {}, flota: {} 
         };
 
-        const docMaster = new GoogleSpreadsheet(ID_SPREADSHEET_MASTER, serviceAccountAuth);
-        const docObs = new GoogleSpreadsheet(ID_SHEET_OBSERVACIONES, serviceAccountAuth);
-        const docAptos = new GoogleSpreadsheet(ID_SHEET_APTOS_MEDICOS, serviceAccountAuth);
-
-        await docMaster.loadInfo();
-        await docObs.loadInfo();
-        await docAptos.loadInfo();
-
-        let docDiag = null;
-
-        if (esArranque) {
-            docDiag = new GoogleSpreadsheet(ID_SPREADSHEET_DIAGRAMAS, serviceAccountAuth);
-            const docMov = new GoogleSpreadsheet(ID_SHEET_MOVIMIENTOS, serviceAccountAuth);
-            
-            try { await docDiag.loadInfo(); } catch (err) {}
-            try { await docMov.loadInfo(); } catch (err) {}
-
-            const sheetVencFlota = docMov.sheetsByTitle['Vencimientos.'];
-            if (sheetVencFlota) {
-                await sheetVencFlota.loadCells('B1:N300');
-                resDiagGAS.vencimientosObj = [];
-                for (let r = 1; r < 300; r++) {
-                    let colB = sheetVencFlota.getCell(r, 1).value;
-                    if (colB) {
-                        resDiagGAS.vencimientosObj.push({
-                            col_b: colB, col_c: sheetVencFlota.getCell(r, 2).formattedValue || "",
-                            col_g: sheetVencFlota.getCell(r, 6).formattedValue || "", col_h: sheetVencFlota.getCell(r, 7).formattedValue || "",
-                            col_j: sheetVencFlota.getCell(r, 9).formattedValue || "", col_k: sheetVencFlota.getCell(r, 10).formattedValue || "",
-                            col_l: sheetVencFlota.getCell(r, 11).formattedValue || "", col_m: sheetVencFlota.getCell(r, 12).formattedValue || "",
-                            col_n: sheetVencFlota.getCell(r, 13).formattedValue || ""
-                        });
-                    }
-                }
+        // 🩺 APTOS MÉDICOS (Lectura Cruda)
+        const rowsAptos = await fetchRango(ID_SHEET_APTOS_MEDICOS, 'Seguimiento Avalados Mensual!A2:AT350');
+        resDiagGAS.aptosMedicos = {};
+        rowsAptos.forEach(row => {
+            if(!row[0] || row[0] === "Nombre Completo") return;
+            let norm = normalizar(row[0]);
+            let estadoDiario = "-";
+            for (let c = 45; c >= 12; c--) {
+                if (row[c] && row[c].trim() !== "" && row[c].trim() !== "-") { estadoDiario = row[c].trim(); break; }
             }
-
-            const sheetFotos = docMaster.sheetsByTitle['fotos'];
-            if (sheetFotos) {
-                await sheetFotos.loadCells('A1:B200');
-                resDiagGAS.fotosImgur = {};
-                for (let r = 0; r < 200; r++) {
-                    let dni = sheetFotos.getCell(r, 0).value; let url = sheetFotos.getCell(r, 1).value;
-                    if (dni && url && String(url).includes('http')) {
-                        let dniLimpio = String(dni).replace(/\D/g, '');
-                        if (dniLimpio) resDiagGAS.fotosImgur[dniLimpio] = String(url).trim();
-                    }
-                }
-            }
-        }
-
-        const sheetCacheBasico = docMaster.sheetsByTitle['API_CACHE_BASICO']; 
-        if (sheetCacheBasico) {
-            await sheetCacheBasico.loadCells('A1:Z15');
-            const extraerJsonDeFila = (sheet, filaIndex) => {
-                let strCompleto = '';
-                for (let col = 0; col < 26; col++) {
-                    try { let cell = sheet.getCell(filaIndex, col); if (cell && cell.value) strCompleto += String(cell.value).replace(/^'/, ""); else break; } catch(e) { break; }
-                }
-                if (!strCompleto) return null;
-                try { return JSON.parse(strCompleto); } catch (e) { return null; }
+            resDiagGAS.aptosMedicos[norm] = { 
+                estado: estadoDiario, cuil: row[1] || "", 
+                observaciones: row[10] || "", observaciones_sector_salud: row[11] || "", responsable: row[5] || "" 
             };
-            resDiagGAS.documentos = extraerJsonDeFila(sheetCacheBasico, 1) || {};
-            resDiagGAS.habilitaciones = extraerJsonDeFila(sheetCacheBasico, 2) || {};
-            resDiagGAS.dnis = extraerJsonDeFila(sheetCacheBasico, 3) || {};
-            resDiagGAS.certificados = extraerJsonDeFila(sheetCacheBasico, 4) || {};
-            resDiagGAS.telefonos = extraerJsonDeFila(sheetCacheBasico, 5) || {};
-        }
+        });
 
-        const sheetFlota = docMaster.sheetsByTitle['choferes y unidades'];
-        if (sheetFlota) {
-            await sheetFlota.loadCells('A1:E300');
-            for (let r = 1; r < 300; r++) {
-                try {
-                    let nombre = sheetFlota.getCell(r, 0).value;
-                    if (!nombre) continue;
-                    let norm = normalizar(nombre);
-                    resDiagGAS.flota[norm] = {
-                        tractor: sheetFlota.getCell(r, 1).value || '',
-                        semi: sheetFlota.getCell(r, 2).value || '',
-                        servicio: sheetFlota.getCell(r, 3).value || '',
-                        n_ute: sheetFlota.getCell(r, 4).value || ''
-                    };
-                } catch(e) { continue; }
-            }
-        }
+        // 📝 OBSERVACIONES (Lectura Cruda)
+        const rowsObs = await fetchRango(ID_SHEET_OBSERVACIONES, 'Movimientos!A5:H2000');
+        resDiagGAS.observaciones = {};
+        rowsObs.forEach(row => {
+            if(!row[1]) return;
+            let norm = normalizar(row[1]);
+            if (!resDiagGAS.observaciones[norm]) resDiagGAS.observaciones[norm] = [];
+            resDiagGAS.observaciones[norm].push({
+                admin: row[0] || "-", fecha: row[2] || "-", unidad: row[3] || "-", evento: row[4] || "-",
+                obsEvento: row[5] || "", estado: row[6] || "-", obsEstado: row[7] || ""
+            });
+        });
 
-        const sheetMov = docObs.sheetsByTitle['Movimientos'];
-        if (sheetMov) {
-            await sheetMov.loadCells('A1:H2000');
-            resDiagGAS.observaciones = {};
-            for (let r = 4; r < 2000; r++) {
-                try {
-                    let nombre = sheetMov.getCell(r, 1).value;
-                    if (!nombre) continue;
-                    let norm = normalizar(nombre);
-                    if (!resDiagGAS.observaciones[norm]) resDiagGAS.observaciones[norm] = [];
-                    
-                    resDiagGAS.observaciones[norm].push({
-                        admin: sheetMov.getCell(r, 0).value || "-", fecha: sheetMov.getCell(r, 2).formattedValue || sheetMov.getCell(r, 2).value || "-",
-                        unidad: sheetMov.getCell(r, 3).value || "-", evento: sheetMov.getCell(r, 4).value || "-",
-                        obsEvento: sheetMov.getCell(r, 5).value || "", estado: sheetMov.getCell(r, 6).value || "-", obsEstado: sheetMov.getCell(r, 7).value || ""
-                    });
-                } catch(e) { continue; }
-            }
-        }
+        // 🚚 FLOTA (Lectura Cruda)
+        const rowsFlota = await fetchRango(ID_SPREADSHEET_MASTER, 'choferes y unidades!A2:E300');
+        rowsFlota.forEach(row => {
+            if(!row[0]) return;
+            let norm = normalizar(row[0]);
+            resDiagGAS.flota[norm] = { tractor: row[1] || '', semi: row[2] || '', servicio: row[3] || '', n_ute: row[4] || '' };
+        });
 
-        const sheetAptos = docAptos.sheetsByTitle['Seguimiento Avalados Mensual'];
-        if (sheetAptos) {
-            await sheetAptos.loadCells('A1:AT350');
-            resDiagGAS.aptosMedicos = {};
-            for (let r = 1; r < 350; r++) {
-                try {
-                    let nombre = sheetAptos.getCell(r, 0).value;
-                    if (!nombre || nombre === "Nombre Completo") continue;
-                    let norm = normalizar(nombre);
-                    
-                    let cuil = sheetAptos.getCell(r, 1).value || ""; let resp = sheetAptos.getCell(r, 5).value || "";
-                    let obs = sheetAptos.getCell(r, 10).value || ""; let obsSalud = sheetAptos.getCell(r, 11).value || "";
-                    let estadoDiario = "-";
-                    for (let c = 45; c >= 12; c--) {
-                        try { let val = sheetAptos.getCell(r, c).value; if (val && String(val).trim() !== "" && String(val).trim() !== "-") { estadoDiario = String(val).trim(); break; } } catch(e) {}
-                    }
-                    
-                    resDiagGAS.aptosMedicos[norm] = { estado: estadoDiario, cuil: String(cuil), observaciones: String(obs), observaciones_sector_salud: String(obsSalud), responsable: String(resp) };
-                } catch(e) { continue; }
-            }
-        }
+        const rowsCache = await fetchRango(ID_SPREADSHEET_MASTER, 'API_CACHE_BASICO!A1:Z15');
+        const extraer = (idx) => {
+            if (!rowsCache[idx]) return {};
+            try { return JSON.parse(rowsCache[idx].join('').replace(/^'/, "")); } catch(e) { return {}; }
+        };
+        resDiagGAS.documentos = extraer(1); resDiagGAS.habilitaciones = extraer(2);
+        resDiagGAS.dnis = extraer(3); resDiagGAS.certificados = extraer(4); resDiagGAS.telefonos = extraer(5);
+
+        let diasLegacyIso = {}; let srvLegacy = {}; let hojasInfo = [];
 
         if (esArranque) {
+            // 📆 VENCIMIENTOS (Lectura Cruda)
+            const rowsVenc = await fetchRango(ID_SHEET_MOVIMIENTOS, 'Vencimientos.!A2:N300');
+            resDiagGAS.vencimientosObj = rowsVenc.map(row => {
+                if (!row[1]) return null;
+                return {
+                    col_b: row[1] || "", col_c: row[2] || "", col_g: row[6] || "", col_h: row[7] || "",
+                    col_j: row[9] || "", col_k: row[10] || "", col_l: row[11] || "", col_m: row[12] || "", col_n: row[13] || ""
+                };
+            }).filter(Boolean);
+
+            // 📷 FOTOS (Lectura Cruda)
+            const rowsFotos = await fetchRango(ID_SPREADSHEET_MASTER, 'fotos!A1:B200');
+            resDiagGAS.fotosImgur = {};
+            rowsFotos.forEach(row => {
+                if (row[0] && row[1] && row[1].includes('http')) resDiagGAS.fotosImgur[row[0].replace(/\D/g, '')] = row[1].trim();
+            });
+
+            // 🗓️ DIAGRAMAS MENSUALES (Lectura Cruda secuencial)
+            let hoy = new Date(); let offsetsMeses = [-1, 0, 1, 2, 3]; 
+            for (let i of offsetsMeses) {
+                let d = new Date(hoy.getFullYear(), hoy.getMonth() + i, 1); let anio = d.getFullYear(); let mesStr = String(d.getMonth() + 1).padStart(2, '0');
+                let nombreHoja = mesesAbrev[d.getMonth()] + "-" + String(anio).slice(-2);
+                hojasInfo.push({ nombre: nombreHoja, anio, mesStr });
+                
+                const rowsDiag = await fetchRango(ID_SPREADSHEET_DIAGRAMAS, `${nombreHoja}!A6:AL255`);
+                rowsDiag.forEach(row => {
+                    let cellNombre = row[1];
+                    if (!cellNombre || cellNombre === "APELLIDO Y NOMBRE" || cellNombre === "Personal Activo") return;
+                    let nomNorm = normalizar(cellNombre); if (!diasLegacyIso[nomNorm]) diasLegacyIso[nomNorm] = {};
+                    if (row[2]) srvLegacy[nomNorm] = String(row[2]).trim();
+                    for (let dia = 1; dia <= 31; dia++) {
+                        let estado = row[dia + 3];
+                        if (estado && estado !== '-') { let isoDate = `${anio}-${mesStr}-${String(dia).padStart(2, '0')}`; diasLegacyIso[nomNorm][isoDate] = String(estado).toUpperCase().trim(); } 
+                    }
+                });
+            }
+
+            // 🗄️ SUPABASE
             const { data: choferes } = await supabase.from('choferes').select('id, nombre, dni, telefono, legajo, email, c_servicio');
             const mapaNombresId = {};
-            
             let docsMap = resDiagGAS.documentos || {}; let habsMap = resDiagGAS.habilitaciones || {}; let certsMap = resDiagGAS.certificados || {};
             let dnisMap = resDiagGAS.dnis || {}; let telefonosMap = resDiagGAS.telefonos || {};
 
             if (choferes) {
                 choferes.forEach(c => { 
-                    const nomNorm = normalizar(c.nombre);
-                    mapaNombresId[c.id] = nomNorm; 
-                    if (c.dni) dnisMap[nomNorm] = { dni: c.dni };
-                    let datosContacto = {};
+                    const nomNorm = normalizar(c.nombre); mapaNombresId[c.id] = nomNorm; if (c.dni) dnisMap[nomNorm] = { dni: c.dni };
+                    let datosContacto = telefonosMap[nomNorm] || {};
                     if (c.telefono) datosContacto.telefono = c.telefono; if (c.legajo) datosContacto.legajo = c.legajo; if (c.email) datosContacto.email = c.email;
                     telefonosMap[nomNorm] = datosContacto; if (c.dni) telefonosMap[c.dni] = datosContacto;
                 });
@@ -250,37 +214,7 @@ async function actualizarCacheDesdeGoogle(esArranque = false) {
                 });
             }
 
-            const fechaLimite = new Date(); fechaLimite.setDate(fechaLimite.getDate() - 365); const fechaLimiteStr = fechaLimite.toISOString().split('T')[0];
-            let diasLegacyIso = {}; let srvLegacy = {}; let hoy = new Date(); let offsetsMeses = [-1, 0, 1, 2, 3]; let hojasInfo = [];
-
-            if (docDiag) {
-                const mapaHojasDiag = {};
-                docDiag.sheetsByIndex.forEach(sheet => { try { mapaHojasDiag[sheet.title] = sheet; } catch(e) {} });
-
-                for (let i of offsetsMeses) {
-                    let d = new Date(hoy.getFullYear(), hoy.getMonth() + i, 1); let anio = d.getFullYear(); let mesStr = String(d.getMonth() + 1).padStart(2, '0');
-                    let nombreHoja = mesesAbrev[d.getMonth()] + "-" + String(anio).slice(-2);
-                    hojasInfo.push({ nombre: nombreHoja, anio, mesStr });
-                    let sheetDiag = mapaHojasDiag[nombreHoja]; if (!sheetDiag) continue;
-                    
-                    try { await sheetDiag.loadCells('A1:AL255'); } catch (boundsError) { try { await sheetDiag.loadCells(); } catch(e) { continue; } }
-                    
-                    for (let r = 5; r < 254; r++) { 
-                        try {
-                            let cellNombre; try { cellNombre = sheetDiag.getCell(r, 1).value; } catch(err) { continue; } 
-                            if (!cellNombre || cellNombre === "APELLIDO Y NOMBRE" || cellNombre === "Personal Activo") continue;
-                            
-                            let nomNorm = normalizar(cellNombre); if (!diasLegacyIso[nomNorm]) diasLegacyIso[nomNorm] = {};
-                            try { let srv = sheetDiag.getCell(r, 2).value; if (srv) srvLegacy[nomNorm] = String(srv).trim(); } catch(err) {}
-                            
-                            for (let dia = 1; dia <= 31; dia++) {
-                                try { let estado = sheetDiag.getCell(r, dia + 3).value; if (estado && estado !== '-') { let isoDate = `${anio}-${mesStr}-${String(dia).padStart(2, '0')}`; diasLegacyIso[nomNorm][isoDate] = String(estado).toUpperCase().trim(); } } catch(err) {} 
-                            }
-                        } catch (e) { continue; } 
-                    }
-                }
-            }
-
+            const fechaLimiteStr = new Date(Date.now() - 365*24*60*60*1000).toISOString().split('T')[0];
             let registrosViajesSQL = []; let diagramasSQL = []; let masViajes = true, masDiag = true; let pagV = 0, pagD = 0;
 
             while (masViajes) {
@@ -297,8 +231,7 @@ async function actualizarCacheDesdeGoogle(esArranque = false) {
             registrosViajesSQL.forEach(row => {
                 const choferNorm = mapaNombresId[row.chofer_id]; if (!choferNorm) return; 
                 if (!nuevaSeccionViajes[choferNorm]) nuevaSeccionViajes[choferNorm] = {};
-                const fechaLimpia = String(row.fecha).split('T')[0];
-                nuevaSeccionViajes[choferNorm][fechaLimpia] = {
+                nuevaSeccionViajes[choferNorm][String(row.fecha).split('T')[0]] = {
                     dominio: row.dominio || '', km: Number(row.km || 0), liviano: Number(row.liviano || 0), euro: Number(row.euro || 0),
                     campo: Number(row.campo || 0), infiniaD: Number(row.infinia_d || 0), hoja_ruta: row.hoja_ruta || []
                 };
@@ -311,9 +244,7 @@ async function actualizarCacheDesdeGoogle(esArranque = false) {
                 dictDiasSQL[choferNorm][String(row.fecha).split('T')[0]] = row.estado;
             });
 
-            let diagramasHibridos = [];
-            let choferesProcesados = new Set(); 
-
+            let diagramasHibridos = []; let choferesProcesados = new Set(); 
             if (choferes) {
                 choferes.forEach(chofer => {
                     const nombreReal = String(chofer.nombre || '').trim(); const nomNorm = normalizar(nombreReal);
@@ -321,20 +252,18 @@ async function actualizarCacheDesdeGoogle(esArranque = false) {
                     choferesProcesados.add(nomNorm);
 
                     let flota = resDiagGAS.flota[nomNorm] || {};
-                    let unTractor = flota.tractor || ''; let unSemi = flota.semi || ''; 
-                    let unUte = flota.n_ute || ''; let srv = flota.servicio || chofer.c_servicio || '';
-
                     let mergeIso = { ...(diasLegacyIso[nomNorm] || {}), ...(dictDiasSQL[nomNorm] || {}) };
                     let diasFront = {};
                     hojasInfo.forEach(info => {
                         let tira = [];
-                        for (let dia = 1; dia <= 31; dia++) { let isoDate = `${info.anio}-${info.mesStr}-${String(dia).padStart(2, '0')}`; tira.push(mergeIso[isoDate] || "-"); }
+                        for (let dia = 1; dia <= 31; dia++) { tira.push(mergeIso[`${info.anio}-${info.mesStr}-${String(dia).padStart(2, '0')}`] || "-"); }
                         diasFront[info.nombre] = tira.join(",");
                     });
 
                     diagramasHibridos.push({
-                        _safeId: "drv_" + nomNorm.replace(/[^a-z0-9]/g, "_"), nom: nombreReal, tractor: unTractor, semi: unSemi, srv: srv, 
-                        n_ute: unUte, td: '-', hex1: "", hex2: "", hex_1: "#ffffff", hex_2: "#ffffff", dias: diasFront, _diasIso: mergeIso     
+                        _safeId: "drv_" + nomNorm.replace(/[^a-z0-9]/g, "_"), nom: nombreReal, 
+                        tractor: flota.tractor || '', semi: flota.semi || '', srv: flota.servicio || chofer.c_servicio || '', n_ute: flota.n_ute || '', 
+                        td: '-', hex1: "", hex2: "", hex_1: "#ffffff", hex_2: "#ffffff", dias: diasFront, _diasIso: mergeIso     
                     });
                 });
             }
@@ -349,7 +278,6 @@ async function actualizarCacheDesdeGoogle(esArranque = false) {
             if (cacheDatosGlobales.diagramas) {
                 cacheDatosGlobales.diagramas.observaciones = resDiagGAS.observaciones;
                 cacheDatosGlobales.diagramas.aptosMedicos = resDiagGAS.aptosMedicos;
-                
                 if (cacheDatosGlobales.diagramas.diagramas) {
                     cacheDatosGlobales.diagramas.diagramas.forEach(d => {
                         let norm = normalizar(d.nom);
@@ -365,7 +293,7 @@ async function actualizarCacheDesdeGoogle(esArranque = false) {
         cacheDatosGlobales.tds = { campo:{}, infinia:{}, liviano:{}, euro:{}, estados:{}, codigosExtra:{} };
         cacheDatosGlobales.ultimaActualizacion = new Date().toISOString();
         io.emit('datos_actualizados', cacheDatosGlobales);
-        console.log(`✅ RAM sincronizada sin congelar el CPU.`);
+        console.log(`✅ RAM sincronizada con consumo ultra bajo.`);
     } catch (error) { console.error("❌ Error en construcción de RAM:", error); }
 }
 
@@ -377,11 +305,7 @@ function obtenerInfoHojaDesdeIso(isoDate) {
 // ==========================================
 // 🔔 3. RECEPTORES DE WEBHOOKS
 // ==========================================
-app.post('/api/webhook/google', async (req, res) => {
-    res.json({ success: true, message: "Recibido" }); 
-    flujoEncoladoGlobal(false); 
-});
-
+app.post('/api/webhook/google', async (req, res) => { res.json({ success: true }); flujoEncoladoGlobal(false); });
 app.get('/health', (req, res) => res.status(200).send('OK'));
 
 // ==========================================
@@ -516,6 +440,5 @@ app.post('/api/proxy', async (req, res) => {
     } catch (error) { console.error(error); res.status(500).json({ success: false, error: "Fallo general en Proxy" }); }
 });
 
-app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => console.log(`🚀 Servidor Node Activo en puerto ${PORT}`));
