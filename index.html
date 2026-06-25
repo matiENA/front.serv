@@ -339,7 +339,7 @@ window.sincronizarBackend = function() {
 
 // --- [TAG: CONEXIÓN BACKEND NATIVO (NODE.JS)] ---
     // Ya no apuntamos a Google, apuntamos a nuestro propio servidor Node
-    const API_URL = "/api/proxy";
+    const API_URL = "https://diagramasnode.onrender.com/api/proxy";
     
     function mostrarErrorGlobal(msg) {
         showToast("Error de conexión: " + msg, "error");
@@ -754,7 +754,7 @@ async function cargarDatosDesdeCache() {
     
     try {
         // 👉 LE PEDIMOS TODO A NODE AL INSTANTE
-        const resNode = await fetch('/api/datos').then(res => res.json());
+        const resNode = await fetch('https://diagramasnode.onrender.com/api/datos').then(res => res.json());
         
         if (!resNode.success) {
             throw new Error(resNode.error || "El servidor aún está cargando la base de datos.");
@@ -3027,8 +3027,7 @@ async function enviarCambioEstado(chofer, fIni, fFin, estado) {
   
 <script>
     // 2. Nos conectamos al servidor en tiempo real
-    const socket = io();
-    
+    const socket = io('https://diagramasnode.onrender.com');    
     // 🛡️ Filtro Anti-Metralleta para proteger el procesador
     let debounceSocketTimer = null; 
 
