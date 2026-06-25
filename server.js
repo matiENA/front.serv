@@ -359,6 +359,32 @@ app.post('/api/proxy', async (req, res) => {
         let huboCambios = false;
         const normalizar = (n) => String(n || '').trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, ' ');
 
+        // 🔐 1. MÓDULO DE LOGIN (Independiente de Google)
+        if (body && body.action === 'login') {
+            const { data: user, error } = await supabase
+                .from('usuarios_auth')
+                .select('id, usuario, rol')
+                .eq('usuario', body.usuario)
+                .eq('password', body.password)
+                .single();
+
+            if (user) {
+                // Login Exitoso: Devolvemos un Token para el Front-End
+                return res.json({ 
+                    success: true, 
+                    token: 'auth_' + user.id + '_' + Date.now(), 
+                    rol: user.rol 
+                });
+            } else {
+                // Falla el Login
+                return res.json({ 
+                    success: false, 
+                    error: "Usuario o contraseña incorrectos." 
+                });
+            }
+        }
+
+        // 📄 2. GUARDADO DE DOCUMENTOS
         if (body && body.action === 'guardarDocumentos') {
             const { data: choferData } = await supabase.from('choferes').select('id').ilike('nombre', body.nombre).single();
             if (choferData) {
@@ -376,6 +402,7 @@ app.post('/api/proxy', async (req, res) => {
             }
         }
 
+        // 🚚 3. GUARDADO DE VIAJES Y HOJAS DE RUTA
         if (body && (body.action === 'guardarHojasRuta' || body.action === 'guardarViaje' || body.action === 'actualizarViaje' || body.hoja_ruta !== undefined || body.km !== undefined)) {
             const nomChofer = body.nombre || body.nom || body.chofer;
             const fechaViaje = body.fecha || body.isoDate;
@@ -412,6 +439,7 @@ app.post('/api/proxy', async (req, res) => {
             }
         }
 
+        // 📅 4. ACTUALIZACIÓN DE ESTADO EN EL CALENDARIO
         if (body && body.action === 'actualizarEstado') {
             const nomChofer = body.nombre; const startIso = body.startIso; const endIso = body.endIso; const estPayload = body.est;
 
@@ -473,6 +501,7 @@ app.post('/api/proxy', async (req, res) => {
             catch (err) {}
         }
 
+        // Emitimos la actualización por Sockets a todos (excepto si fue solo login)
         if (body && body.action !== 'login' && huboCambios) {
             cacheDatosGlobales.ultimaActualizacion = new Date().toISOString();
             io.emit('datos_actualizados', cacheDatosGlobales); 
