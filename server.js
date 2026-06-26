@@ -3,7 +3,6 @@ const compression = require('compression');
 const cors = require('cors');
 const http = require('http'); 
 const { Server } = require('socket.io');
-
 const { GoogleSpreadsheet } = require('google-spreadsheet');
 const { JWT } = require('google-auth-library');
 const { createClient } = require('@supabase/supabase-js');
@@ -20,7 +19,6 @@ app.use(cors({
     allowedHeaders: ['Content-Type', 'Authorization', 'Accept']
 }));
 app.options('*', cors());
-
 app.use(express.json({ type: ['application/json', 'text/plain'] }));
 
 // ==========================================
@@ -343,7 +341,7 @@ app.post('/api/proxy', async (req, res) => {
         const body = req.body; let huboCambios = false;
         const normalizar = (n) => String(n || '').trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, ' ');
 
-        // 🔐 LOGIN CON SUPABASE (Se mantiene intacto)
+        // 🔐 LOGIN CON SUPABASE
         if (body && body.action === 'login') {
             try {
                 const { data: user } = await supabase.from('usuarios_auth').select('id, usuario, rol').eq('usuario', body.usuario).eq('password', body.password).single();
