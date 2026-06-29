@@ -117,13 +117,13 @@ async function actualizarCacheDesdeGoogle(esArranque = false) {
             }
         } catch(e) {}
 
-        // ==========================================
-        // 🪪 MOTOR DE RASTREO MAESTRO (Planilla LEGAJOS)
+// ==========================================
+        // 🪪 MOTOR DE RASTREO MAESTRO (Planilla LEGAJOS vía IMPORTRANGE)
         // ==========================================
         let dnisMap = {}; let telefonosMap = {};
         try {
-            const TAB_NAME = "INFORMACION CONDUCTORES";
-            const rowsLegajos = await fetchRango(ID_SHEET_LEGAJOS_MAESTRO, `'${TAB_NAME}'!A8:P350`);
+            // 👉 Lee de la pestaña 'LEGAJOS' que creaste en el Master Sheet
+            const rowsLegajos = await fetchRango(ID_SPREADSHEET_MASTER, "'LEGAJOS'!A2:P350");
             
             if (rowsLegajos && rowsLegajos.length > 0) {
                 rowsLegajos.forEach(row => {
@@ -132,17 +132,24 @@ async function actualizarCacheDesdeGoogle(esArranque = false) {
                     if (!nomRaw || nomRaw.toLowerCase().includes("baja") || nomRaw.toLowerCase() === "apellido - nombre") return;
 
                     let nomNorm = normalizar(nomRaw);
-                    let legajoStr = String(row[0] || "").trim(); let dniStr = String(row[2] || "").replace(/\D/g, '');
-                    let telStr = String(row[3] || "").trim(); let emailStr = String(row[4] || "").trim(); let fechaAltaStr = String(row[10] || "").trim();
+                    let legajoStr = String(row[0] || "").trim(); 
+                    let dniStr = String(row[2] || "").replace(/\D/g, '');
+                    let telStr = String(row[3] || "").trim(); 
+                    let emailStr = String(row[4] || "").trim(); 
+                    let fechaAltaStr = String(row[10] || "").trim();
 
                     let datosContacto = { legajo: legajoStr, telefono: telStr, email: emailStr, fechaAlta: fechaAltaStr };
                     telefonosMap[nomNorm] = datosContacto;
 
                     if (dniStr) {
                         let dniPuro = String(parseInt(dniStr, 10)); 
-                        dnisMap[nomNorm] = { dni: dniPuro }; telefonosMap[dniPuro] = datosContacto;
+                        dnisMap[nomNorm] = { dni: dniPuro }; 
+                        telefonosMap[dniPuro] = datosContacto;
                     }
                 });
+                console.log(`✅ ${Object.keys(dnisMap).length} choferes extraídos de 'LEGAJOS' (vía IMPORTRANGE).`);
+            } else {
+                console.warn("⚠️ No se encontraron datos en la pestaña 'LEGAJOS' del Master.");
             }
         } catch (e) { console.error("❌ Error en Motor de Rastreo de Legajos:", e); }
 
