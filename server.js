@@ -91,7 +91,7 @@ setTimeout(() => { flujoEncoladoGlobal(true); }, 3000);
 // ==========================================
 async function actualizarCacheDesdeGoogle(esArranque = false) {
     try {
-        console.log(esArranque ? "🚀 ARRANQUE: Descarga Cruda (RAM Protegida)..." : "⚡ WEBHOOK: Actualizando RAM ligera...");
+        console.log(esArranque ? "🚀 ARRANQUE: Descarga Cruda (RAM Protegida)..." : "⚡ WEBHOOK/SAVE: Actualizando RAM en tiempo real...");
         const normalizar = (n) => String(n || '').trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, ' ');
 
         let resDiagGAS = {
@@ -117,6 +117,46 @@ async function actualizarCacheDesdeGoogle(esArranque = false) {
             }
         } catch(e) {}
 
+        // ==========================================
+        // 🪪 MOTOR DE RASTREO MAESTRO (Planilla LEGAJOS)
+        // ==========================================
+        let dnisMap = {}; let telefonosMap = {};
+        try {
+            const TAB_NAME = "INFORMACION CONDUCTORES";
+            const rowsLegajos = await fetchRango(ID_SHEET_LEGAJOS_MAESTRO, `'${TAB_NAME}'!A8:P350`);
+            
+            if (rowsLegajos && rowsLegajos.length > 0) {
+                rowsLegajos.forEach(row => {
+                    if (!row || row.length < 2) return;
+                    let nomRaw = String(row[1] || "").trim();
+                    if (!nomRaw || nomRaw.toLowerCase().includes("baja") || nomRaw.toLowerCase() === "apellido - nombre") return;
+
+                    let nomNorm = normalizar(nomRaw);
+                    let legajoStr = String(row[0] || "").trim(); let dniStr = String(row[2] || "").replace(/\D/g, '');
+                    let telStr = String(row[3] || "").trim(); let emailStr = String(row[4] || "").trim(); let fechaAltaStr = String(row[10] || "").trim();
+
+                    let datosContacto = { legajo: legajoStr, telefono: telStr, email: emailStr, fechaAlta: fechaAltaStr };
+                    telefonosMap[nomNorm] = datosContacto;
+
+                    if (dniStr) {
+                        let dniPuro = String(parseInt(dniStr, 10)); 
+                        dnisMap[nomNorm] = { dni: dniPuro }; telefonosMap[dniPuro] = datosContacto;
+                    }
+                });
+            }
+        } catch (e) { console.error("❌ Error en Motor de Rastreo de Legajos:", e); }
+
+        try {
+            const ID_SHEET_HABILITACIONES = '1hPDno09tMBtKh7aIdsvzEYcyOY7leYj2B6XnniD0aXg'; const ID_SHEET_DOCUMENTOS = '1pnYXKDSv70Vq78Rchxus5FHMKdgXdbfltVsEg6vArjo';
+            const [resDocsTab, resHabsTab] = await Promise.all([ fetchRango(ID_SHEET_DOCUMENTOS, "'PERIODICOS'!A1:E300"), fetchRango(ID_SHEET_HABILITACIONES, "'VENCIMIENTOS'!A1:C300") ]);
+            const extraerDni = (c) => { let l = String(c).replace(/\D/g, ''); return l.length === 11 ? String(parseInt(l.substring(2, 10), 10)) : (l.length === 10 ? String(parseInt(l.substring(2, 9), 10)) : String(parseInt(l, 10))); };
+            resDocsTab.forEach(fila => { let nom = normalizar(fila[1]); let dni = extraerDni(fila[4]); if (nom && dni && !dnisMap[nom]) dnisMap[nom] = { dni: dni }; });
+            resHabsTab.forEach(fila => { let nom = normalizar(fila[1]); let dni = String(fila[2] || '').replace(/\D/g, ''); if (nom && dni && !dnisMap[nom]) dnisMap[nom] = { dni: String(parseInt(dni, 10)) }; });
+        } catch (e) {}
+
+        resDiagGAS.dnis = dnisMap; resDiagGAS.telefonos = telefonosMap;
+
+        // Aptos y Observaciones
         try {
             const rowsAptos = await fetchRango(ID_SHEET_APTOS_MEDICOS, "'Seguimiento Avalados Mensual'!A1:AT350");
             resDiagGAS.aptosMedicos = {};
@@ -127,25 +167,18 @@ async function actualizarCacheDesdeGoogle(esArranque = false) {
                 const formatosHoy = [`${hoy.getDate()}/${mesesLargo[hoy.getMonth()]}/${y}`.toLowerCase(), `${d}/${m}/${y}`, `${d}/${m}`, String(hoy.getDate())];
 
                 let colDiaria = -1;
-                for (let c = 12; c < headers.length; c++) {
-                    if (formatosHoy.includes(String(headers[c] || "").trim().toLowerCase())) { colDiaria = c; break; }
-                }
+                for (let c = 12; c < headers.length; c++) { if (formatosHoy.includes(String(headers[c] || "").trim().toLowerCase())) { colDiaria = c; break; } }
                 if (colDiaria === -1) { for (let c = headers.length - 1; c >= 12; c--) { if (String(headers[c] || "").trim() !== "") { colDiaria = c; break; } } }
 
                 for (let i = 1; i < rowsAptos.length; i++) {
                     let fila = rowsAptos[i]; let nombreRaw = String(fila[0] || "").trim(); 
                     if (!nombreRaw || nombreRaw.toLowerCase() === "nombre completo") continue;
-
                     let cuil = String(fila[1] || "").trim(); let dniLimpio = String(cuil).replace(/\D/g, '');
                     if (dniLimpio.length === 11) dniLimpio = String(parseInt(dniLimpio.substring(2, 10), 10));
                     else if (dniLimpio.length === 10) dniLimpio = String(parseInt(dniLimpio.substring(2, 9), 10));
                     else dniLimpio = String(parseInt(dniLimpio, 10) || "");
-
                     let estadoDiario = "-"; let limiteBusqueda = colDiaria > -1 ? colDiaria : fila.length - 1;
-                    for (let c = limiteBusqueda; c >= 12; c--) {
-                        let val = String(fila[c] || "").trim();
-                        if (val !== "" && val !== "-") { estadoDiario = val; break; }
-                    }
+                    for (let c = limiteBusqueda; c >= 12; c--) { let val = String(fila[c] || "").trim(); if (val !== "" && val !== "-") { estadoDiario = val; break; } }
                     let nombreNormalizado = nombreRaw.replace(/,/g, '').toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, ' ').replace(/\s+/g, ' ');
                     let objApto = { dni: dniLimpio, cuil: cuil, estado: estadoDiario, responsable: fila[5] || "", observaciones: fila[10] || "", observaciones_sector_salud: fila[11] || "" };
                     if (dniLimpio) resDiagGAS.aptosMedicos[dniLimpio] = objApto;
@@ -167,119 +200,58 @@ async function actualizarCacheDesdeGoogle(esArranque = false) {
         const extraer = (idx) => { if (!rowsCache[idx]) return {}; try { return JSON.parse(rowsCache[idx].join('').replace(/^'/, "")); } catch(e) { return {}; } };
         resDiagGAS.documentos = extraer(1); resDiagGAS.habilitaciones = extraer(2); resDiagGAS.certificados = extraer(4);
 
-        let diasLegacyIso = {}; let dictDiasSQL = {}; let hojasInfo = []; let nuevaSeccionViajes = {};
+        let diasLegacyIso = {}; let dictDiasSQL = {}; let hojasInfo = []; 
+        
+        // ==========================================
+        // 🚚 EXTRACCIÓN DE KILÓMETROS Y VIAJES (SIEMPRE SE EJECUTA)
+        // ==========================================
+        let nuevaSeccionViajes = {};
+        try {
+            const rowsKm = await fetchRango(ID_SHEET_KILOMETROS, "'KM'!A2:T");
+            const limiteDate = new Date(); limiteDate.setDate(limiteDate.getDate() - 180); 
+            const parseNum = (val) => parseFloat(String(val || '').replace(/,/g, '.').replace(/[^0-9.-]/g, '')) || 0;
+
+            rowsKm.forEach(row => {
+                let fechaRaw = row[1]; let nombreRaw = row[2];
+                if (!fechaRaw || !nombreRaw) return;
+                let dObj; let parts = String(fechaRaw).split(' ')[0].split(/[\/\-]/);
+                if (parts.length >= 3) { let aa = parts[2].length === 2 ? "20" + parts[2] : parts[2]; dObj = new Date(aa, parseInt(parts[1], 10) - 1, parts[0]); } else { dObj = new Date(fechaRaw); }
+                if (isNaN(dObj.getTime()) || dObj < limiteDate) return;
+
+                let choferNorm = normalizar(nombreRaw); let isoDate = dObj.toISOString().split('T')[0];
+                let kmBase = parseNum(row[16]); let kmBackup = parseNum(row[8]); let km = kmBase > 0 ? kmBase : kmBackup;
+                let liviano = parseNum(row[3]); let euro = parseNum(row[4]); let campo = parseNum(row[5]); let infiniaD = parseNum(row[7]);
+                let hojaStr = String(row[19] || "").trim();
+
+                if (km > 0 || campo > 0 || liviano > 0 || euro > 0 || infiniaD > 0 || hojaStr !== "") {
+                    if (!nuevaSeccionViajes[choferNorm]) nuevaSeccionViajes[choferNorm] = {};
+                    if (!nuevaSeccionViajes[choferNorm][isoDate]) nuevaSeccionViajes[choferNorm][isoDate] = { dominio: String(row[0] || '').trim(), km: 0, liviano: 0, euro: 0, campo: 0, infiniaD: 0, hoja_ruta: [] };
+                    let target = nuevaSeccionViajes[choferNorm][isoDate];
+                    target.km += km; target.liviano += liviano; target.euro += euro; target.campo += campo; target.infiniaD += infiniaD;
+                    if (hojaStr !== "") {
+                        let arrHojas = hojaStr.split(',').map(s => s.trim()).filter(Boolean);
+                        arrHojas.forEach(h => { if (!target.hoja_ruta.includes(h)) target.hoja_ruta.push(h); });
+                    }
+                }
+            });
+        } catch(e) { console.error("Error Leyendo KMs:", e); }
 
         if (esArranque) {
-            
- // ==========================================
-            // 🪪 MOTOR DE RASTREO MAESTRO (Desde Pestaña 'LEGAJOS' del Master)
-            // ==========================================
-            let dnisMap = {};
-            let telefonosMap = {};
-
-            try {
-                // 👉 Leemos la nueva pestaña LEGAJOS que creaste en el Master
-                // Empezamos desde A2 porque A1 tiene el encabezado traído por el IMPORTRANGE
-                const rowsLegajos = await fetchRango(ID_SPREADSHEET_MASTER, "'LEGAJOS'!A2:P350");
-                
-                if (rowsLegajos && rowsLegajos.length > 0) {
-                    rowsLegajos.forEach(row => {
-                        // Si la fila está vacía o no tiene nombre, la saltamos
-                        if (!row || row.length < 2) return;
-
-                        let nomRaw = String(row[1] || "").trim(); // Columna B (Índice 1)
-                        
-                        // Ignoramos filas separadoras o de choferes dados de baja
-                        if (!nomRaw || nomRaw.toLowerCase().includes("baja") || nomRaw.toLowerCase() === "apellido - nombre") return;
-
-                        let nomNorm = normalizar(nomRaw);
-                        let legajoStr = String(row[0] || "").trim(); // Columna A (Índice 0)
-                        let dniStr = String(row[2] || "").replace(/\D/g, ''); // Columna C (Índice 2)
-                        let telStr = String(row[3] || "").trim(); // Columna D (Índice 3)
-                        let emailStr = String(row[4] || "").trim(); // Columna E (Índice 4)
-                        let fechaAltaStr = String(row[10] || "").trim(); // Columna K (Índice 10)
-
-                        let datosContacto = {
-                            legajo: legajoStr,
-                            telefono: telStr,
-                            email: emailStr,
-                            fechaAlta: fechaAltaStr
-                        };
-
-                        // Asignamos al nombre
-                        telefonosMap[nomNorm] = datosContacto;
-
-                        // Asignamos al DNI (El anclaje principal para tu front-end)
-                        if (dniStr) {
-                            let dniPuro = String(parseInt(dniStr, 10)); // Quita ceros a la izquierda por seguridad
-                            dnisMap[nomNorm] = { dni: dniPuro };
-                            telefonosMap[dniPuro] = datosContacto;
-                        }
-                    });
-                    console.log(`✅ ${Object.keys(dnisMap).length} choferes extraídos de 'LEGAJOS' (vía IMPORTRANGE).`);
-                } else {
-                    console.warn(`⚠️ No se encontraron datos en la pestaña 'LEGAJOS' del Master.`);
-                }
-            } catch (e) { 
-                console.error("❌ Error en Motor de Rastreo de Legajos:", e); 
-            }
-
-            // ==========================================
-            // 🛟 RED DE RESPALDO (Complementa con Docs y Habs)
-            // ==========================================
-            try {
-                const ID_SHEET_HABILITACIONES = '1hPDno09tMBtKh7aIdsvzEYcyOY7leYj2B6XnniD0aXg';
-                const ID_SHEET_DOCUMENTOS = '1pnYXKDSv70Vq78Rchxus5FHMKdgXdbfltVsEg6vArjo';
-                const [resDocsTab, resHabsTab] = await Promise.all([ 
-                    fetchRango(ID_SHEET_DOCUMENTOS, "'PERIODICOS'!A1:E300"), 
-                    fetchRango(ID_SHEET_HABILITACIONES, "'VENCIMIENTOS'!A1:C300") 
-                ]);
-                
-                const extraerDni = (c) => { 
-                    let l = String(c).replace(/\D/g, ''); 
-                    return l.length === 11 ? String(parseInt(l.substring(2, 10), 10)) : (l.length === 10 ? String(parseInt(l.substring(2, 9), 10)) : String(parseInt(l, 10))); 
-                };
-                
-                resDocsTab.forEach(fila => { 
-                    let nom = normalizar(fila[1]); let dni = extraerDni(fila[4]); 
-                    if (nom && dni && !dnisMap[nom]) dnisMap[nom] = { dni: dni }; 
-                });
-                resHabsTab.forEach(fila => { 
-                    let nom = normalizar(fila[1]); let dni = String(fila[2] || '').replace(/\D/g, ''); 
-                    if (nom && dni && !dnisMap[nom]) dnisMap[nom] = { dni: String(parseInt(dni, 10)) }; 
-                });
-            } catch (e) {}
-
-            resDiagGAS.dnis = dnisMap;
-            resDiagGAS.telefonos = telefonosMap;
-            // ==========================================
-
             const rowsVenc = await fetchRango(ID_SHEET_MOVIMIENTOS, "'Vencimientos.'!A2:N300");
             resDiagGAS.vencimientosObj = rowsVenc.map(row => {
                 if (!row[1]) return null;
                 return { col_b: row[1] || "", col_c: row[2] || "", col_g: row[6] || "", col_h: row[7] || "", col_j: row[9] || "", col_k: row[10] || "", col_l: row[11] || "", col_m: row[12] || "", col_n: row[13] || "" };
             }).filter(Boolean);
 
-// ==========================================
-            // 📸 EXTRACCIÓN DE FOTOS (Columna completa y DNI Inteligente)
-            // ==========================================
-            const rowsFotos = await fetchRango(ID_SPREADSHEET_MASTER, "'fotos'!A:B"); // Lee toda la hoja sin límite
+            const rowsFotos = await fetchRango(ID_SPREADSHEET_MASTER, "'fotos'!A:B");
             resDiagGAS.fotosImgur = {};
-            
             rowsFotos.forEach(row => { 
                 if (row[0] && row[1] && String(row[1]).includes('http')) {
-                    let numStr = String(row[0]).replace(/\D/g, '');
-                    if (!numStr) return;
-                    
-                    // Si alguien pegó un CUIL en vez de un DNI, lo recortamos al DNI
-                    if (numStr.length === 11) numStr = numStr.substring(2, 10);
-                    else if (numStr.length === 10) numStr = numStr.substring(2, 9);
-                    
-                    let dniPuro = String(parseInt(numStr, 10)); // Quita ceros a la izquierda
-                    resDiagGAS.fotosImgur[dniPuro] = String(row[1]).trim(); 
+                    let numStr = String(row[0]).replace(/\D/g, ''); if (!numStr) return;
+                    if (numStr.length === 11) numStr = numStr.substring(2, 10); else if (numStr.length === 10) numStr = numStr.substring(2, 9);
+                    resDiagGAS.fotosImgur[String(parseInt(numStr, 10))] = String(row[1]).trim(); 
                 }
             });
-            console.log(`📸 ${Object.keys(resDiagGAS.fotosImgur).length} Fotos extraídas de la base de datos.`);
 
             let hoy = new Date(); let offsetsMeses = [-1, 0, 1, 2, 3]; 
             for (let i of offsetsMeses) {
@@ -298,36 +270,6 @@ async function actualizarCacheDesdeGoogle(esArranque = false) {
                     }
                 });
             }
-
-            try {
-                const rowsKm = await fetchRango(ID_SHEET_KILOMETROS, "'KM'!A2:T");
-                const limiteDate = new Date(); limiteDate.setDate(limiteDate.getDate() - 180); 
-                const parseNum = (val) => parseFloat(String(val || '').replace(/,/g, '.').replace(/[^0-9.-]/g, '')) || 0;
-
-                rowsKm.forEach(row => {
-                    let fechaRaw = row[1]; let nombreRaw = row[2];
-                    if (!fechaRaw || !nombreRaw) return;
-                    let dObj; let parts = String(fechaRaw).split(' ')[0].split(/[\/\-]/);
-                    if (parts.length >= 3) { let aa = parts[2].length === 2 ? "20" + parts[2] : parts[2]; dObj = new Date(aa, parseInt(parts[1], 10) - 1, parts[0]); } else { dObj = new Date(fechaRaw); }
-                    if (isNaN(dObj.getTime()) || dObj < limiteDate) return;
-
-                    let choferNorm = normalizar(nombreRaw); let isoDate = dObj.toISOString().split('T')[0];
-                    let kmBase = parseNum(row[16]); let kmBackup = parseNum(row[8]); let km = kmBase > 0 ? kmBase : kmBackup;
-                    let liviano = parseNum(row[3]); let euro = parseNum(row[4]); let campo = parseNum(row[5]); let infiniaD = parseNum(row[7]);
-                    let hojaStr = String(row[19] || "").trim();
-
-                    if (km > 0 || campo > 0 || liviano > 0 || euro > 0 || infiniaD > 0 || hojaStr !== "") {
-                        if (!nuevaSeccionViajes[choferNorm]) nuevaSeccionViajes[choferNorm] = {};
-                        if (!nuevaSeccionViajes[choferNorm][isoDate]) nuevaSeccionViajes[choferNorm][isoDate] = { dominio: String(row[0] || '').trim(), km: 0, liviano: 0, euro: 0, campo: 0, infiniaD: 0, hoja_ruta: [] };
-                        let target = nuevaSeccionViajes[choferNorm][isoDate];
-                        target.km += km; target.liviano += liviano; target.euro += euro; target.campo += campo; target.infiniaD += infiniaD;
-                        if (hojaStr !== "") {
-                            let arrHojas = hojaStr.split(',').map(s => s.trim()).filter(Boolean);
-                            arrHojas.forEach(h => { if (!target.hoja_ruta.includes(h)) target.hoja_ruta.push(h); });
-                        }
-                    }
-                });
-            } catch(e) {}
 
             let diagramasHibridos = []; 
             listaChoferesMaestros.forEach(choferMaster => {
@@ -349,7 +291,7 @@ async function actualizarCacheDesdeGoogle(esArranque = false) {
             });
 
             cacheDatosGlobales.diagramas = { 
-                diagramas: diagramasHibridos, nuevaSeccionViajes, documentos: resDiagGAS.documentos, habilitaciones: resDiagGAS.habilitaciones, certificados: resDiagGAS.certificados,
+                diagramas: diagramasHibridos, nuevaSeccionViajes: nuevaSeccionViajes, documentos: resDiagGAS.documentos, habilitaciones: resDiagGAS.habilitaciones, certificados: resDiagGAS.certificados,
                 dnis: resDiagGAS.dnis, telefonos: resDiagGAS.telefonos, observaciones: resDiagGAS.observaciones, aptosMedicos: resDiagGAS.aptosMedicos, 
                 vencimientosObj: resDiagGAS.vencimientosObj, fotosImgur: resDiagGAS.fotosImgur
             };
@@ -358,6 +300,8 @@ async function actualizarCacheDesdeGoogle(esArranque = false) {
             if (cacheDatosGlobales.diagramas) {
                 cacheDatosGlobales.diagramas.observaciones = resDiagGAS.observaciones;
                 cacheDatosGlobales.diagramas.aptosMedicos = resDiagGAS.aptosMedicos;
+                // 👉 ¡AQUÍ ESTÁ LA MAGIA! AHORA ACTUALIZAMOS LOS VIAJES EN TIEMPO REAL
+                cacheDatosGlobales.diagramas.nuevaSeccionViajes = nuevaSeccionViajes; 
             }
         }
 
