@@ -1324,8 +1324,7 @@ html += `
             </div>`;
                     });
         html += `</div>`;
-        container.innerHTML = html;
-    }
+        window.actualizarSinBlink('contenedor-lista-principal', html);    }
 
     window.toggleDetalle = function(id) {
         const d = document.getElementById(`detalle-${id}`); const i = document.getElementById(`icon-chevron-${id}`);
@@ -1414,8 +1413,7 @@ tr += `<td id="cell-${c._safeId}-${isoStr}" data-row="${c._safeId}" data-col="${
             tablaHtml += tr + '</tr>';
         });
         
-        container.innerHTML = tablaHtml + '</tbody></table></div>';
-
+    window.actualizarSinBlink('contenedor-lista-principal', tablaHtml + '</tbody></table></div>');
         setTimeout(() => {
             let isoHoy = formatIsoShort(fBaseObj);
             let celdaHoy = document.getElementById(`header-day-${isoHoy}`);
@@ -1573,7 +1571,6 @@ window.mostrarDetalleConductor = function(safeId, mantenerSeleccion = false) {
     let diaRetornoObj = calcularRetorno(chofer.dias, fechaGlobalContexto);
     let diaRetornoIso = formatIsoShort(diaRetornoObj);
 
-    // 👉 SOLUCIÓN: Reincorporar la generación de las placas (badges) de vencimiento de documentos
     let dEst = evaluarEstadoDoc(doc.ven, fBaseObj);
     let hEst = evaluarEstadoDoc(hab.ven, fBaseObj);
     let cEst = evaluarEstadoDoc(cert.ven, fBaseObj);
@@ -1586,7 +1583,9 @@ window.mostrarDetalleConductor = function(safeId, mantenerSeleccion = false) {
     let fCicloFin = new Date(fBaseObj.getFullYear(), fBaseObj.getMonth(), 25, 12, 0, 0);
 
     let histTrabajados = 0, histFrancos = 0, histVacaciones = 0, histAusencias = 0;
-    let totalKm = 0; 
+    
+    // 👉 VARIABLES DE SUMA DE VIAJES
+    let totalKm = 0, totalCampo = 0, totalLiviano = 0, totalEuro = 0, totalInfiniaD = 0; 
     
     for (let d = new Date(fCicloInicio); d <= fCicloFin; d.setDate(d.getDate() + 1)) {
         let baseVal = getBaseState(getValDiaGlobal(chofer.dias, d));
@@ -1595,11 +1594,18 @@ window.mostrarDetalleConductor = function(safeId, mantenerSeleccion = false) {
         else if (['V','VSF'].includes(baseVal)) histVacaciones++; 
         else if (['IND','E','A','S','ART'].includes(baseVal)) histAusencias++;
 
-        totalKm += window.obtenerKmDia(chofer.nom, formatIsoShort(d)); 
+        let isoStrCiclo = formatIsoShort(d);
+        totalKm += window.obtenerKmDia(chofer.nom, isoStrCiclo); 
+        
+        // Extraemos y sumamos la nueva estructura
+        let detViaje = window.obtenerDetalleViajeDia(chofer.nom, isoStrCiclo);
+        if (detViaje) {
+            totalCampo += parseFloat(detViaje.campo) || 0;
+            totalLiviano += parseFloat(detViaje.liviano) || 0;
+            totalEuro += parseFloat(detViaje.euro) || 0;
+            totalInfiniaD += parseFloat(detViaje.infiniaD) || 0;
+        }
     }
-
-    let mesContextoViajes = getTabNameFromDate(fBaseObj);      
-    let datosCampo = (viajesGlobales && viajesGlobales[n] && viajesGlobales[n][mesContextoViajes]) ? viajesGlobales[n][mesContextoViajes] : { km: 0, liviano: 0, euro: 0, infiniaD: 0 };
 
     const diasSemana = ['L', 'M', 'X', 'J', 'V', 'S', 'D'];
     const nombresMeses = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
@@ -1668,9 +1674,8 @@ window.mostrarDetalleConductor = function(safeId, mantenerSeleccion = false) {
             else if (['V','VSF'].includes(baseVal)) { bgClass = 'bg-[#ffe599] border-transparent text-gray-900 font-bold shadow-sm hover:brightness-95'; } 
             else if (['IND','E','A','S','ART'].includes(baseVal)) { bgClass = 'bg-[#e06666] border-transparent text-white font-bold shadow-sm hover:brightness-95'; }                
             
-let isToday = (isCurrentMonth && i === fBaseObj.getDate()) ? 'ring-2 ring-primary ring-offset-1' : '';
+            let isToday = (isCurrentMonth && i === fBaseObj.getDate()) ? 'ring-2 ring-primary ring-offset-1' : '';
             
-            // 🛠️ INYECCIÓN NATIVA DE SELECCIÓN PARA EVITAR EL BLINK
             let claseSeleccion = '';
             if (mantenerSeleccion && seleccionInicioIso && currentEndIso) {
                 let d1 = new Date(seleccionInicioIso + "T12:00:00");
@@ -1784,19 +1789,19 @@ let isToday = (isCurrentMonth && i === fBaseObj.getDate()) ? 'ring-2 ring-primar
                     </div>
                     <div class="flex justify-between items-center gap-2 bg-purple-50 border border-purple-200 px-2 py-1.5 rounded-md shadow-sm shrink-0 whitespace-nowrap flex-1">
                         <span class="text-[9px] font-bold text-purple-800 uppercase">Campos</span>
-                        <span class="font-black text-purple-900 text-xs">${datosCampo.km.toLocaleString('es-AR')}</span>
+                        <span class="font-black text-purple-900 text-xs">${totalCampo.toLocaleString('es-AR')}</span>
                     </div>
                     <div class="flex justify-between items-center gap-2 bg-emerald-50 border border-emerald-200 px-2 py-1.5 rounded-md shadow-sm shrink-0 whitespace-nowrap flex-1">
                         <span class="text-[9px] font-bold text-emerald-800 uppercase">Liviano</span>
-                        <span class="font-black text-emerald-900 text-xs">${datosCampo.liviano.toLocaleString('es-AR')}</span>
+                        <span class="font-black text-emerald-900 text-xs">${totalLiviano.toLocaleString('es-AR')}</span>
                     </div>
                     <div class="flex justify-between items-center gap-2 bg-teal-50 border border-teal-200 px-2 py-1.5 rounded-md shadow-sm shrink-0 whitespace-nowrap flex-1">
                         <span class="text-[9px] font-bold text-teal-800 uppercase">Euro</span>
-                        <span class="font-black text-teal-900 text-xs">${datosCampo.euro.toLocaleString('es-AR')}</span>
+                        <span class="font-black text-teal-900 text-xs">${totalEuro.toLocaleString('es-AR')}</span>
                     </div>
                     <div class="flex justify-between items-center gap-2 bg-cyan-50 border border-cyan-200 px-2 py-1.5 rounded-md shadow-sm shrink-0 whitespace-nowrap flex-1">
                         <span class="text-[9px] font-bold text-cyan-800 uppercase">Infinia D</span>
-                        <span class="font-black text-cyan-900 text-xs">${datosCampo.infiniaD.toLocaleString('es-AR')}</span>
+                        <span class="font-black text-cyan-900 text-xs">${totalInfiniaD.toLocaleString('es-AR')}</span>
                     </div>
                 </div>
             </div>
@@ -1861,10 +1866,10 @@ let isToday = (isCurrentMonth && i === fBaseObj.getDate()) ? 'ring-2 ring-primar
     </div>
     `;
     
-    contenedor.innerHTML = html + getHTMLRestante(chofer, doc, hab, cert, apto, badgeExam, badgeLic, badgeCert);
+    window.actualizarSinBlink('contenedor-detalle-chofer', html + getHTMLRestante(chofer, doc, hab, cert, apto, badgeExam, badgeLic, badgeCert));
     renderizarHistorialEventos(chofer.nom);
 
-if (mantenerSeleccion && seleccionInicioIso && currentEndIso) {
+    if (mantenerSeleccion && seleccionInicioIso && currentEndIso) {
         setTimeout(() => {
             let d1 = new Date(seleccionInicioIso + "T12:00:00"); 
             let d2 = new Date(currentEndIso + "T12:00:00"); 
@@ -1876,8 +1881,7 @@ if (mantenerSeleccion && seleccionInicioIso && currentEndIso) {
         }, 10); // Reducimos el delay porque ya no requiere renderizado del DOM pesado
     }
 };
-
-    // ====================================================================
+// ====================================================================
 // --- SELECCIÓN Y PINTADO DE RANGOS EN EL CALENDARIO ---
 // ====================================================================
 
@@ -3059,8 +3063,38 @@ async function enviarCambioEstado(chofer, fIni, fFin, estado) {
   });
 }
 
+// ====================================================================
+// 🧬 MOTOR DE MUTACIÓN DOM (CERO BLINK)
+// ====================================================================
+window.actualizarSinBlink = function(elementoId, nuevoHTML) {
+    const contenedor = document.getElementById(elementoId);
+    if (!contenedor) return;
+
+    if (typeof morphdom !== 'undefined') {
+        // Creamos un nodo temporal virtual
+        const nodoVirtual = contenedor.cloneNode(false);
+        nodoVirtual.innerHTML = nuevoHTML;
+        
+        // Morphdom compara el nodo real con el virtual y aplica SOLO las diferencias
+        morphdom(contenedor, nodoVirtual, {
+            onBeforeElUpdated: function(fromEl, toEl) {
+                // Si el elemento es un input y estamos escribiendo en él, no lo sobreescribimos
+                if (fromEl.tagName === 'INPUT' && fromEl === document.activeElement) {
+                    return false; 
+                }
+                return true;
+            }
+        });
+    } else {
+        // Respaldo por si falla internet y no carga la librería
+        contenedor.innerHTML = nuevoHTML;
+    }
+};
+
   </script>
 
+<script src="https://unpkg.com/morphdom@2.7.1/dist/morphdom-umd.min.js"></script>
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
   
 <script>
