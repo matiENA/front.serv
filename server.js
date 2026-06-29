@@ -19,7 +19,7 @@ app.use(cors({
     allowedHeaders: ['Content-Type', 'Authorization', 'Accept']
 }));
 app.options('*', cors());
-app.use(express.json({ type: ['application/json', 'text/plain'] }));
+app.use(express.json({ limit: '10mb', type: ['application/json', 'text/plain'] }));
 
 // ==========================================
 // 1. CONFIGURACIÓN E INSTANCIAS
@@ -260,9 +260,26 @@ async function actualizarCacheDesdeGoogle(esArranque = false) {
                 return { col_b: row[1] || "", col_c: row[2] || "", col_g: row[6] || "", col_h: row[7] || "", col_j: row[9] || "", col_k: row[10] || "", col_l: row[11] || "", col_m: row[12] || "", col_n: row[13] || "" };
             }).filter(Boolean);
 
-            const rowsFotos = await fetchRango(ID_SPREADSHEET_MASTER, "'fotos'!A1:B200");
+// ==========================================
+            // 📸 EXTRACCIÓN DE FOTOS (Columna completa y DNI Inteligente)
+            // ==========================================
+            const rowsFotos = await fetchRango(ID_SPREADSHEET_MASTER, "'fotos'!A:B"); // Lee toda la hoja sin límite
             resDiagGAS.fotosImgur = {};
-            rowsFotos.forEach(row => { if (row[0] && row[1] && row[1].includes('http')) resDiagGAS.fotosImgur[row[0].replace(/\D/g, '')] = row[1].trim(); });
+            
+            rowsFotos.forEach(row => { 
+                if (row[0] && row[1] && String(row[1]).includes('http')) {
+                    let numStr = String(row[0]).replace(/\D/g, '');
+                    if (!numStr) return;
+                    
+                    // Si alguien pegó un CUIL en vez de un DNI, lo recortamos al DNI
+                    if (numStr.length === 11) numStr = numStr.substring(2, 10);
+                    else if (numStr.length === 10) numStr = numStr.substring(2, 9);
+                    
+                    let dniPuro = String(parseInt(numStr, 10)); // Quita ceros a la izquierda
+                    resDiagGAS.fotosImgur[dniPuro] = String(row[1]).trim(); 
+                }
+            });
+            console.log(`📸 ${Object.keys(resDiagGAS.fotosImgur).length} Fotos extraídas de la base de datos.`);
 
             let hoy = new Date(); let offsetsMeses = [-1, 0, 1, 2, 3]; 
             for (let i of offsetsMeses) {
@@ -362,10 +379,10 @@ app.get('/health', (req, res) => res.status(200).send('OK'));
 // ==========================================
 // 🌟 4. RUTAS API Y PROXY
 // ==========================================
-app.get('/api/datos', (req, res) => {
+    app.get('/api/datos', (req, res) => {
     if (!cacheDatosGlobales.diagramas) return res.status(503).json({ error: "Cargando DB..." });
     res.json({ success: true, diagramas: cacheDatosGlobales.diagramas, tds: cacheDatosGlobales.tds, timestamp: cacheDatosGlobales.ultimaActualizacion });
-});
+        });
 
 app.post('/api/proxy', async (req, res) => {
     try {
@@ -481,9 +498,11 @@ app.post('/api/proxy', async (req, res) => {
             huboCambios = true;
         }
 
-        if (body && body.action === 'guardarHojaRutaPlanilla') {
+       if (body && body.action === 'guardarHojaRutaPlanilla') {
             let stringHojas = (body.hojas || []).join(', ');
             let nBuscado = normalizar(body.nombre);
+            
+            // Creamos targetStr en formato "DD/MM/YY" estricto (Ej: "07/06/26")
             let dTarget = new Date(body.fecha + "T12:00:00");
             let targetStr = `${String(dTarget.getDate()).padStart(2,'0')}/${String(dTarget.getMonth()+1).padStart(2,'0')}/${String(dTarget.getFullYear()).slice(-2)}`;
             
@@ -493,8 +512,38 @@ app.post('/api/proxy', async (req, res) => {
             
             let rowIndex = -1;
             for (let i = 1; i < rowsBC.length; i++) {
-                let fFila = String(rowsBC[i][0] || '').trim(); let nFila = normalizar(rowsBC[i][1]);
-                if (nFila === nBuscado && (fFila.startsWith(targetStr) || fFila.startsWith(body.fecha) || fFila.includes(targetStr))) { rowIndex = i + 1; break; }
+                let fFilaRaw = String(rowsBC[i][0] || '').trim();
+                let nFila = normalizar(rowsBC[i][1]);
+                
+                if (nFila === nBuscado) {
+                    // Limpiamos la fecha de la planilla (Quitamos " - domingo", etc.)
+                    let partesFecha = fFilaRaw.split(' ')[0].split(/[\/\-]/);
+                    let coincide = false;
+                    
+                    if (partesFecha.length >= 3) {
+                        // Forzamos a que siempre tenga ceros a la izquierda (7 -> 07)
+                        let diaFila = String(parseInt(partesFecha[0], 10)).padStart(2, '0');
+                        let mesFila = String(parseInt(partesFecha[1], 10)).padStart(2, '0');
+                        let anioFila = partesFecha[2].length === 4 ? partesFecha[2].slice(-2) : partesFecha[2];
+                        
+                        // Respaldo por si pegan la fecha al revés (YYYY-MM-DD)
+                        if (partesFecha[0].length === 4) {
+                            diaFila = String(parseInt(partesFecha[2], 10)).padStart(2, '0');
+                            mesFila = String(parseInt(partesFecha[1], 10)).padStart(2, '0');
+                            anioFila = partesFecha[0].slice(-2);
+                        }
+                        
+                        let filaNormalizada = `${diaFila}/${mesFila}/${anioFila}`;
+                        
+                        // Ahora comparamos "07/06/26" === "07/06/26"
+                        if (filaNormalizada === targetStr) coincide = true;
+                    } else {
+                        // Respaldo de emergencia
+                        if (fFilaRaw.includes(targetStr) || fFilaRaw.startsWith(body.fecha)) coincide = true;
+                    }
+
+                    if (coincide) { rowIndex = i + 1; break; }
+                }
             }
 
             if (rowIndex !== -1) {
@@ -514,6 +563,75 @@ app.post('/api/proxy', async (req, res) => {
         res.json({ success: true, message: "Operación completada" });
 
     } catch (error) { console.error(error); res.status(500).json({ success: false, error: "Fallo general en Proxy" }); }
+});
+
+// ==========================================
+// 📸 MÓDULO DE FOTOS (SUBIDA A IMGUR Y GOOGLE SHEETS)
+// ==========================================
+app.post('/api/subir-foto', async (req, res) => {
+    try {
+        const { dni, imagenBase64 } = req.body;
+        if (!dni || !imagenBase64) return res.status(400).json({ success: false, error: "Faltan datos (DNI o Imagen)" });
+
+        // 1. SUBIR LA FOTO A LA API DE IMGUR
+        const IMGUR_CLIENT_ID = process.env.IMGUR_CLIENT_ID || 'Tu_Client_ID_Aqui'; // Reemplázalo o ponlo en las variables de entorno de Render
+        
+        // Limpiamos el prefijo 'data:image/jpeg;base64,' que envía el HTML
+        const base64Data = imagenBase64.replace(/^data:image\/\w+;base64,/, "");
+        
+        const imgurResponse = await fetch('https://api.imgur.com/3/image', {
+            method: 'POST',
+            headers: { 'Authorization': `Client-ID ${IMGUR_CLIENT_ID}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ image: base64Data, type: 'base64' })
+        });
+        
+        const imgurData = await imgurResponse.json();
+        if (!imgurData.success) throw new Error("La API de Imgur rechazó la imagen.");
+        
+        const linkOficial = imgurData.data.link; // Ej: https://i.imgur.com/xxxxx.jpg
+
+        // 2. GUARDAR EL LINK EN LA PESTAÑA 'fotos' DE GOOGLE SHEETS
+        const urlPestañaFotos = `https://sheets.googleapis.com/v4/spreadsheets/${ID_SPREADSHEET_MASTER}/values/'fotos'!A:B`;
+        const resFotos = await serviceAccountAuth.request({ url: urlPestañaFotos });
+        const rowsFotos = resFotos.data.values || [];
+        
+        let rowIndex = -1;
+        let dniPuro = String(dni).replace(/\D/g, '');
+
+        // Buscamos si el chofer ya tenía una foto anterior
+        for (let i = 0; i < rowsFotos.length; i++) {
+            if (String(rowsFotos[i][0]).replace(/\D/g, '') === dniPuro) {
+                rowIndex = i + 1; break;
+            }
+        }
+
+        if (rowIndex !== -1) {
+            // Si existe, ACTUALIZAMOS la columna B
+            await serviceAccountAuth.request({
+                url: `https://sheets.googleapis.com/v4/spreadsheets/${ID_SPREADSHEET_MASTER}/values/'fotos'!B${rowIndex}?valueInputOption=USER_ENTERED`,
+                method: 'PUT',
+                data: { values: [[linkOficial]] }
+            });
+        } else {
+            // Si es nuevo, LO AGREGAMOS al final de la lista
+            await serviceAccountAuth.request({
+                url: `https://sheets.googleapis.com/v4/spreadsheets/${ID_SPREADSHEET_MASTER}/values/'fotos'!A:B:append?valueInputOption=USER_ENTERED`,
+                method: 'POST',
+                data: { values: [[dniPuro, linkOficial]] }
+            });
+        }
+
+        // 3. ACTUALIZAR LA MEMORIA RAM Y AVISAR A LAS PANTALLAS
+        if (!cacheDatosGlobales.diagramas.fotosImgur) cacheDatosGlobales.diagramas.fotosImgur = {};
+        cacheDatosGlobales.diagramas.fotosImgur[dniPuro] = linkOficial;
+        io.emit('datos_actualizados', cacheDatosGlobales);
+
+        res.json({ success: true, link: linkOficial, mensaje: "Foto vinculada exitosamente al legajo." });
+
+    } catch (error) {
+        console.error("❌ Error subiendo foto:", error);
+        res.status(500).json({ success: false, error: "Error en el servidor procesando la imagen." });
+    }
 });
 
 const PORT = process.env.PORT || 3000;
