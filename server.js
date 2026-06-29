@@ -40,6 +40,7 @@ const ID_SHEET_OBSERVACIONES = '1VwCNK89ecaac7IDlMWWCLHRqZoch9HB6vop5AfQEaA0';
 const ID_SHEET_APTOS_MEDICOS = '1oJmN8hurfHfNnGBYUFcBdlrIj2VUzeIyq0ZTWxTpYNI';
 const ID_SHEET_MOVIMIENTOS = '1hhJKwp9xOOHL_zZSJMbrJh5fwfsIPre155UTWhKWI44'; 
 const ID_SHEET_KILOMETROS = '1Wr-_P4mDvldif_cAx08sp7yT8uTUrajI2HQAJF6tnGM';
+const ID_SHEET_LEGAJOS_MAESTRO = '19_UPtQYtu7l9zeZPK_glqonxD5jnxXyD8msyy_1lydg'; // 🪪 NUEVA PLANILLA LEGAJOS
 const mesesAbrev = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
 
 let cacheDatosGlobales = { diagramas: null, tds: null, nombresMesActual: [], ultimaActualizacion: null };
@@ -170,53 +171,83 @@ async function actualizarCacheDesdeGoogle(esArranque = false) {
 
         if (esArranque) {
             
+ // ==========================================
+            // 🪪 MOTOR DE RASTREO MAESTRO (Desde Pestaña 'LEGAJOS' del Master)
             // ==========================================
-            // 🪪 EXTRACCIÓN INTELIGENTE: PESTAÑA DNI (REEMPLAZA SUPABASE)
-            // ==========================================
-            let dnisMap = {}; let telefonosMap = {};
+            let dnisMap = {};
+            let telefonosMap = {};
+
             try {
-                const rowsDni = await fetchRango(ID_SPREADSHEET_MASTER, "'dni'!A1:Z300");
-                if (rowsDni.length > 0) {
-                    let celdaA1 = String(rowsDni[0][0] || "").trim();
-                    
-                    if (celdaA1.startsWith('{')) {
-                        // 🟢 CASO A: Es un JSON generado por Apps Script (Legajos, Teléfono, Email)
-                        let parsedDni = JSON.parse(celdaA1);
-                        for (const [key, val] of Object.entries(parsedDni)) {
-                            if (key.includes("apellido")) continue; // Saltar cabecera
-                            let nomNorm = normalizar(key);
-                            let dniStr = String(val.dni || "").replace(/\D/g, '');
-                            
-                            if (dniStr) dnisMap[nomNorm] = { dni: dniStr };
-                            
-                            let datosContacto = { telefono: val.telefono || "", legajo: val.legajo || "", email: val.email || "" };
-                            telefonosMap[nomNorm] = datosContacto;
-                            if (dniStr) telefonosMap[dniStr] = datosContacto;
+                // 👉 Leemos la nueva pestaña LEGAJOS que creaste en el Master
+                // Empezamos desde A2 porque A1 tiene el encabezado traído por el IMPORTRANGE
+                const rowsLegajos = await fetchRango(ID_SPREADSHEET_MASTER, "'LEGAJOS'!A2:P350");
+                
+                if (rowsLegajos && rowsLegajos.length > 0) {
+                    rowsLegajos.forEach(row => {
+                        // Si la fila está vacía o no tiene nombre, la saltamos
+                        if (!row || row.length < 2) return;
+
+                        let nomRaw = String(row[1] || "").trim(); // Columna B (Índice 1)
+                        
+                        // Ignoramos filas separadoras o de choferes dados de baja
+                        if (!nomRaw || nomRaw.toLowerCase().includes("baja") || nomRaw.toLowerCase() === "apellido - nombre") return;
+
+                        let nomNorm = normalizar(nomRaw);
+                        let legajoStr = String(row[0] || "").trim(); // Columna A (Índice 0)
+                        let dniStr = String(row[2] || "").replace(/\D/g, ''); // Columna C (Índice 2)
+                        let telStr = String(row[3] || "").trim(); // Columna D (Índice 3)
+                        let emailStr = String(row[4] || "").trim(); // Columna E (Índice 4)
+                        let fechaAltaStr = String(row[10] || "").trim(); // Columna K (Índice 10)
+
+                        let datosContacto = {
+                            legajo: legajoStr,
+                            telefono: telStr,
+                            email: emailStr,
+                            fechaAlta: fechaAltaStr
+                        };
+
+                        // Asignamos al nombre
+                        telefonosMap[nomNorm] = datosContacto;
+
+                        // Asignamos al DNI (El anclaje principal para tu front-end)
+                        if (dniStr) {
+                            let dniPuro = String(parseInt(dniStr, 10)); // Quita ceros a la izquierda por seguridad
+                            dnisMap[nomNorm] = { dni: dniPuro };
+                            telefonosMap[dniPuro] = datosContacto;
                         }
-                        console.log("🪪 DNI y Contactos leídos desde JSON en pestaña 'dni'.");
-                    } else {
-                        // 🟢 CASO B: Es una tabla de texto normal
-                        rowsDni.forEach(fila => {
-                            let nIzq = normalizar(fila[0]); let dIzq = String(fila[1] || fila[2] || '').replace(/\D/g, '');
-                            if (nIzq && dIzq) {
-                                dnisMap[nIzq] = { dni: String(parseInt(dIzq, 10)) };
-                                telefonosMap[nIzq] = { legajo: fila[3] || "", telefono: fila[4] || "", email: fila[5] || "" };
-                                telefonosMap[dIzq] = telefonosMap[nIzq];
-                            }
-                        });
-                        console.log("🪪 DNI y Contactos leídos desde Columnas en pestaña 'dni'.");
-                    }
+                    });
+                    console.log(`✅ ${Object.keys(dnisMap).length} choferes extraídos de 'LEGAJOS' (vía IMPORTRANGE).`);
+                } else {
+                    console.warn(`⚠️ No se encontraron datos en la pestaña 'LEGAJOS' del Master.`);
                 }
-            } catch (e) { console.error("❌ Error leyendo pestaña 'dni':", e); }
-            
-            // Red de respaldo (Docs y Habs)
+            } catch (e) { 
+                console.error("❌ Error en Motor de Rastreo de Legajos:", e); 
+            }
+
+            // ==========================================
+            // 🛟 RED DE RESPALDO (Complementa con Docs y Habs)
+            // ==========================================
             try {
                 const ID_SHEET_HABILITACIONES = '1hPDno09tMBtKh7aIdsvzEYcyOY7leYj2B6XnniD0aXg';
                 const ID_SHEET_DOCUMENTOS = '1pnYXKDSv70Vq78Rchxus5FHMKdgXdbfltVsEg6vArjo';
-                const [resDocsTab, resHabsTab] = await Promise.all([ fetchRango(ID_SHEET_DOCUMENTOS, "'PERIODICOS'!A1:E300"), fetchRango(ID_SHEET_HABILITACIONES, "'VENCIMIENTOS'!A1:C300") ]);
-                const extraerDni = (c) => { let l = String(c).replace(/\D/g, ''); return l.length === 11 ? String(parseInt(l.substring(2, 10), 10)) : (l.length === 10 ? String(parseInt(l.substring(2, 9), 10)) : String(parseInt(l, 10))); };
-                resDocsTab.forEach(fila => { let nom = normalizar(fila[1]); let dni = extraerDni(fila[4]); if (nom && dni && !dnisMap[nom]) dnisMap[nom] = { dni: dni }; });
-                resHabsTab.forEach(fila => { let nom = normalizar(fila[1]); let dni = String(fila[2] || '').replace(/\D/g, ''); if (nom && dni && !dnisMap[nom]) dnisMap[nom] = { dni: String(parseInt(dni, 10)) }; });
+                const [resDocsTab, resHabsTab] = await Promise.all([ 
+                    fetchRango(ID_SHEET_DOCUMENTOS, "'PERIODICOS'!A1:E300"), 
+                    fetchRango(ID_SHEET_HABILITACIONES, "'VENCIMIENTOS'!A1:C300") 
+                ]);
+                
+                const extraerDni = (c) => { 
+                    let l = String(c).replace(/\D/g, ''); 
+                    return l.length === 11 ? String(parseInt(l.substring(2, 10), 10)) : (l.length === 10 ? String(parseInt(l.substring(2, 9), 10)) : String(parseInt(l, 10))); 
+                };
+                
+                resDocsTab.forEach(fila => { 
+                    let nom = normalizar(fila[1]); let dni = extraerDni(fila[4]); 
+                    if (nom && dni && !dnisMap[nom]) dnisMap[nom] = { dni: dni }; 
+                });
+                resHabsTab.forEach(fila => { 
+                    let nom = normalizar(fila[1]); let dni = String(fila[2] || '').replace(/\D/g, ''); 
+                    if (nom && dni && !dnisMap[nom]) dnisMap[nom] = { dni: String(parseInt(dni, 10)) }; 
+                });
             } catch (e) {}
 
             resDiagGAS.dnis = dnisMap;
