@@ -163,37 +163,78 @@ async function actualizarCacheDesdeGoogle(esArranque = false) {
 
         resDiagGAS.dnis = dnisMap; resDiagGAS.telefonos = telefonosMap;
 
-        // Aptos y Observaciones
+// ==========================================
+        // 🩺 EXTRACCIÓN DE APTOS MÉDICOS (Dinámico Diario)
+        // ==========================================
         try {
-            const rowsAptos = await fetchRango(ID_SHEET_APTOS_MEDICOS, "'Seguimiento Avalados Mensual'!A1:AT350");
+            // 👉 RANGO ABIERTO HASTA 'ZZ' PARA SOPORTAR COLUMNAS INFINITAS
+            const rowsAptos = await fetchRango(ID_SHEET_APTOS_MEDICOS, "'Seguimiento Avalados Mensual'!A1:ZZ500");
             resDiagGAS.aptosMedicos = {};
+            
             if (rowsAptos.length > 0) {
                 const headers = rowsAptos[0]; 
-                const hoy = new Date(); const d = String(hoy.getDate()).padStart(2, '0'); const m = String(hoy.getMonth() + 1).padStart(2, '0'); const y = hoy.getFullYear();
+                const hoy = new Date(); 
+                const d = String(hoy.getDate()).padStart(2, '0'); 
+                const m = String(hoy.getMonth() + 1).padStart(2, '0'); 
+                const y = hoy.getFullYear();
                 const mesesLargo = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
+                
+                // Formatos posibles que usan en las columnas (Ej: "29/junio/2026")
                 const formatosHoy = [`${hoy.getDate()}/${mesesLargo[hoy.getMonth()]}/${y}`.toLowerCase(), `${d}/${m}/${y}`, `${d}/${m}`, String(hoy.getDate())];
 
                 let colDiaria = -1;
-                for (let c = 12; c < headers.length; c++) { if (formatosHoy.includes(String(headers[c] || "").trim().toLowerCase())) { colDiaria = c; break; } }
-                if (colDiaria === -1) { for (let c = headers.length - 1; c >= 12; c--) { if (String(headers[c] || "").trim() !== "") { colDiaria = c; break; } } }
+                // 1. Buscamos si ya crearon la columna con la fecha exacta de HOY
+                for (let c = 12; c < headers.length; c++) { 
+                    if (formatosHoy.includes(String(headers[c] || "").trim().toLowerCase())) { colDiaria = c; break; } 
+                }
+                
+                // 2. Si no la crearon (ej. fin de semana), tomamos la ÚLTIMA columna que exista
+                if (colDiaria === -1) { 
+                    for (let c = headers.length - 1; c >= 12; c--) { 
+                        if (String(headers[c] || "").trim() !== "") { colDiaria = c; break; } 
+                    } 
+                }
 
                 for (let i = 1; i < rowsAptos.length; i++) {
-                    let fila = rowsAptos[i]; let nombreRaw = String(fila[0] || "").trim(); 
+                    let fila = rowsAptos[i]; 
+                    let nombreRaw = String(fila[0] || "").trim(); 
                     if (!nombreRaw || nombreRaw.toLowerCase() === "nombre completo") continue;
-                    let cuil = String(fila[1] || "").trim(); let dniLimpio = String(cuil).replace(/\D/g, '');
+                    
+                    let cuil = String(fila[1] || "").trim(); 
+                    let dniLimpio = String(cuil).replace(/\D/g, '');
                     if (dniLimpio.length === 11) dniLimpio = String(parseInt(dniLimpio.substring(2, 10), 10));
                     else if (dniLimpio.length === 10) dniLimpio = String(parseInt(dniLimpio.substring(2, 9), 10));
                     else dniLimpio = String(parseInt(dniLimpio, 10) || "");
-                    let estadoDiario = "-"; let limiteBusqueda = colDiaria > -1 ? colDiaria : fila.length - 1;
-                    for (let c = limiteBusqueda; c >= 12; c--) { let val = String(fila[c] || "").trim(); if (val !== "" && val !== "-") { estadoDiario = val; break; } }
+                    
+                    let estadoDiario = "-"; 
+                    let limiteBusqueda = colDiaria > -1 ? colDiaria : fila.length - 1;
+                    
+                    // 3. Escáner hacia atrás: Busca el ÚLTIMO estado cargado para este chofer
+                    for (let c = limiteBusqueda; c >= 12; c--) { 
+                        let val = String(fila[c] || "").trim(); 
+                        if (val !== "" && val !== "-") { estadoDiario = val; break; } 
+                    }
+                    
                     let nombreNormalizado = nombreRaw.replace(/,/g, '').toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, ' ').replace(/\s+/g, ' ');
-                    let objApto = { dni: dniLimpio, cuil: cuil, estado: estadoDiario, responsable: fila[5] || "", observaciones: fila[10] || "", observaciones_sector_salud: fila[11] || "" };
+                    
+                    // Guardamos la columna C como "Estado General"
+                    let estadoGeneral = String(fila[2] || "").trim();
+
+                    let objApto = { 
+                        dni: dniLimpio, 
+                        cuil: cuil, 
+                        estadoGeneral: estadoGeneral, 
+                        estado: estadoDiario, // El estado de la última columna de la derecha
+                        responsable: fila[5] || "", 
+                        observaciones: fila[10] || "", 
+                        observaciones_sector_salud: fila[11] || "" 
+                    };
+                    
                     if (dniLimpio) resDiagGAS.aptosMedicos[dniLimpio] = objApto;
                     if (nombreNormalizado) resDiagGAS.aptosMedicos[nombreNormalizado] = objApto;
                 }
             }
-        } catch (e) {}
-
+        } catch (e) { console.error("❌ Error en Aptos Médicos:", e); }
         const rowsObs = await fetchRango(ID_SHEET_OBSERVACIONES, "'Movimientos'!A5:H2000");
         resDiagGAS.observaciones = {};
         rowsObs.forEach(row => {
