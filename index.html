@@ -1668,11 +1668,23 @@ window.mostrarDetalleConductor = function(safeId, mantenerSeleccion = false) {
             else if (['V','VSF'].includes(baseVal)) { bgClass = 'bg-[#ffe599] border-transparent text-gray-900 font-bold shadow-sm hover:brightness-95'; } 
             else if (['IND','E','A','S','ART'].includes(baseVal)) { bgClass = 'bg-[#e06666] border-transparent text-white font-bold shadow-sm hover:brightness-95'; }                
             
-            let isToday = (isCurrentMonth && i === fBaseObj.getDate()) ? 'ring-2 ring-primary ring-offset-1' : '';
+let isToday = (isCurrentMonth && i === fBaseObj.getDate()) ? 'ring-2 ring-primary ring-offset-1' : '';
+            
+            // 🛠️ INYECCIÓN NATIVA DE SELECCIÓN PARA EVITAR EL BLINK
+            let claseSeleccion = '';
+            if (mantenerSeleccion && seleccionInicioIso && currentEndIso) {
+                let d1 = new Date(seleccionInicioIso + "T12:00:00");
+                let d2 = new Date(currentEndIso + "T12:00:00");
+                let curDate = new Date(isoStr + "T12:00:00");
+                let s = d1 <= d2 ? d1 : d2;
+                let e = d1 <= d2 ? d2 : d1;
+                if (curDate >= s && curDate <= e) {
+                    claseSeleccion = 'seleccionada brightness-110';
+                }
+            }
             
             gridHtml += `
-            <div data-fecha="${isoStr}" onclick="manejarSeleccionCalendario('${isoStr}', event, '${chofer._safeId}')" class="celda-calendario relative cursor-pointer w-full aspect-square flex flex-col items-center justify-center border rounded-lg ${bgClass} ${isToday} transition-all select-none overflow-hidden group">
-                <span class="absolute top-1 left-1.5 text-[9px] font-bold opacity-40 group-hover:opacity-70 transition-opacity pointer-events-none">${i}</span>
+            <div data-fecha="${isoStr}" onclick="manejarSeleccionCalendario('${isoStr}', event, '${chofer._safeId}')" class="celda-calendario relative cursor-pointer w-full aspect-square flex flex-col items-center justify-center border rounded-lg ${bgClass} ${isToday} ${claseSeleccion} transition-all select-none overflow-hidden group">                <span class="absolute top-1 left-1.5 text-[9px] font-bold opacity-40 group-hover:opacity-70 transition-opacity pointer-events-none">${i}</span>
                 <span class="text-xs sm:text-sm font-black pointer-events-none drop-shadow-sm z-10 w-full text-center truncate px-0.5">${textVal}</span>
                 <div class="absolute bottom-1 w-full flex justify-center items-center gap-0.5 pointer-events-none px-1">${dotHtml}${obsHtml}${docVenHtml}</div>
             </div>`;
@@ -1852,15 +1864,16 @@ window.mostrarDetalleConductor = function(safeId, mantenerSeleccion = false) {
     contenedor.innerHTML = html + getHTMLRestante(chofer, doc, hab, cert, apto, badgeExam, badgeLic, badgeCert);
     renderizarHistorialEventos(chofer.nom);
 
-    if (mantenerSeleccion && seleccionInicioIso && currentEndIso) {
+if (mantenerSeleccion && seleccionInicioIso && currentEndIso) {
         setTimeout(() => {
             let d1 = new Date(seleccionInicioIso + "T12:00:00"); 
             let d2 = new Date(currentEndIso + "T12:00:00"); 
             let start = d1 <= d2 ? seleccionInicioIso : currentEndIso; 
             let end = d1 <= d2 ? currentEndIso : seleccionInicioIso; 
-            pintarCeldas(start, end); 
+            
+            // 🗑️ ELIMINAMOS pintarCeldas(start, end) porque el HTML ya nace pintado desde la raíz
             mostrarPanelAcciones(conductorSeleccionadoId, start, end); 
-        }, 50); 
+        }, 10); // Reducimos el delay porque ya no requiere renderizado del DOM pesado
     }
 };
 
