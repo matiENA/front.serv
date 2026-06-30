@@ -441,24 +441,27 @@ document.addEventListener('click', (e) => {
 
 window.mapearVencimientos = function(patente, jsonVencimientos) {
     if (!patente || !jsonVencimientos || !Array.isArray(jsonVencimientos)) return null;
+    
     const patenteLimpia = String(patente).replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+    
     const record = jsonVencimientos.find(item => {
         const patenteItem = String(item.col_b || '').replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
         return patenteItem === patenteLimpia;
     });
 
     if (!record) return null;
-    return {
-        vtv_tr: record.col_g,  
-        vtv_semi: record.col_h,  
-        mass_tr: record.col_j, 
-        mass_semi: record.col_k, 
-        esp_es: record.col_l,  
-        vi: record.col_m,   
-        ve: record.col_n    
-    };
-};
     
+    // 👉 CORRECCIÓN: Alineación exacta con la disposición real de la planilla 'Vencimientos.'
+    return {
+        mass_tr: record.col_g,   // Columna G: MASS TR
+        vtv_tr: record.col_h,    // Columna H: VTV TR
+        mass_semi: record.col_j, // Columna J: MAS SEMI
+        vtv_semi: record.col_k,  // Columna K: VTV SEMI
+        esp_es: record.col_l,    // Columna L: Esp-Es
+        vi: record.col_m,        // Columna M: VI
+        ve: record.col_n         // Columna N: VE
+    };
+};    
     window.parseFechaObs = function(fechaStr) {
         if (!fechaStr || fechaStr === '-') return null;
         const partes = fechaStr.trim().split(' ');
@@ -491,20 +494,51 @@ window.mapearVencimientos = function(patente, jsonVencimientos) {
 
     function getTabNameFromDate(dateObj) { return `${mesesAbrev[dateObj.getMonth()]}-${String(dateObj.getFullYear()).slice(-2)}`; }
 
+// 1. MOTOR CENTRAL DE FECHAS (Reparado con Padding y Contexto)
     window.evaluarEstadoDoc = function(venStr, fBaseObj) {
-        if(!venStr || venStr === '-' || venStr === '') return 'VIGENTE'; 
-        let vDate = new Date(venStr + "T12:00:00");
-        if(isNaN(vDate.getTime())) return 'VIGENTE';
-        let diff = (vDate - fBaseObj) / (1000 * 60 * 60 * 24);
-        if(diff < 0) return 'VENCIDO';
-        if(diff <= 30) return 'POR_VENCER';
+        if(!venStr || venStr === '-' || String(venStr).trim() === '') return 'VIGENTE'; 
+        
+        let fechaLimpia = String(venStr).trim();
+        
+        // Si viene en formato DD/MM/YYYY, agregamos los ceros faltantes a meses y días
+        if (fechaLimpia.includes('/')) {
+            let p = fechaLimpia.split('/');
+            if (p.length === 3) {
+                let yyyy = p[2].length === 2 ? "20" + p[2] : p[2];
+                let mm = p[1].padStart(2, '0');
+                let dd = p[0].padStart(2, '0');
+                fechaLimpia = `${yyyy}-${mm}-${dd}`;
+            }
+        } 
+        // Si viene en YYYY-M-D, aseguramos el padding
+        else if (fechaLimpia.includes('-')) {
+            let p = fechaLimpia.split('-');
+            if (p.length === 3 && p[0].length === 4) {
+                fechaLimpia = `${p[0]}-${p[1].padStart(2, '0')}-${p[2].padStart(2, '0')}`;
+            }
+        }
+
+        let vDate = new Date(fechaLimpia + "T12:00:00");
+        
+        // Si la fecha cargada en excel está corrupta, ignoramos para no romper el sistema
+        if(isNaN(vDate.getTime())) return 'VIGENTE'; 
+        
+        // Comparamos usando la Fecha Contexto que el usuario seleccionó abajo a la derecha
+        let dateContexto = new Date(fBaseObj);
+        dateContexto.setHours(12, 0, 0, 0); // Congelamos la hora para que la diferencia de días sea exacta
+        
+        let diff = (vDate - dateContexto) / (1000 * 60 * 60 * 24);
+        
+        if (diff < 0) return 'VENCIDO';
+        if (diff <= 30) return 'POR_VENCER'; // 🟡 ALERTA PREVENTIVA: 30 DÍAS JUSTOS
         return 'VIGENTE';
     };
 
+    // 2. ESCÁNER DE UNIDADES (Limpiado para delegar fechas al motor central)
     window.evaluarAlertasUnidad = function(unidadData, fBaseObj) {
         if (!unidadData) return 'OK';
         
-        // Escaneamos todas las columnas de la unidad
+        // Escaneamos TR y SEMI
         let docs = [
             unidadData.mass_tr || unidadData.col_g,
             unidadData.mass_semi || unidadData.col_j,
@@ -520,13 +554,8 @@ window.mapearVencimientos = function(patente, jsonVencimientos) {
         
         docs.forEach(d => {
             if (!d || d === '-' || String(d).trim() === '') return;
-            let fechaNormalizada = String(d).trim();
-            // Normalizar fechas tipo dd/mm/yyyy a yyyy-mm-dd para el evaluador
-            if (fechaNormalizada.includes('/')) {
-                let partes = fechaNormalizada.split('/');
-                if (partes.length === 3) fechaNormalizada = `${partes[2]}-${partes[1]}-${partes[0]}`;
-            }
-            let est = window.evaluarEstadoDoc(fechaNormalizada, fBaseObj);
+            // Se le envía directamente al motor central que ahora es a prueba de balas
+            let est = window.evaluarEstadoDoc(String(d).trim(), fBaseObj);
             if (est === 'VENCIDO') tieneVencido = true;
             if (est === 'POR_VENCER') tienePorVencer = true;
         });
@@ -536,6 +565,46 @@ window.mapearVencimientos = function(patente, jsonVencimientos) {
         return 'OK';
     };
 
+    // 3. RENDERIZADO VISUAL DEL BADGE
+    window.renderBadgeUnidad = function(fechaStr, tipo, unidad, fBaseObj) {
+        if (!fechaStr || fechaStr === '-' || String(fechaStr).trim() === '') {
+            return `
+            <div class="flex justify-between items-center bg-white border border-gray-100 px-2.5 py-1.5 rounded-lg shadow-sm opacity-60">
+                <span class="text-[10px] font-black text-gray-400 uppercase tracking-wide">${tipo} <span class="font-bold">(${unidad})</span></span>
+                <span class="text-[10px] font-bold text-gray-400 border border-gray-200 px-1.5 py-0.5 rounded-md">S/D</span>
+            </div>`;
+        }
+
+        let fechaNormalizada = String(fechaStr).trim();
+        let est = window.evaluarEstadoDoc(fechaNormalizada, fBaseObj);
+        
+        // Forzamos que visualmente siempre se vea en formato DD/MM/YYYY limpio con ceros
+        let displayDate = fechaNormalizada;
+        if (fechaNormalizada.includes('-')) {
+            let p = fechaNormalizada.split('-');
+            if (p[0].length === 4) displayDate = `${p[2].padStart(2, '0')}/${p[1].padStart(2, '0')}/${p[0]}`; 
+            else displayDate = `${p[0].padStart(2, '0')}/${p[1].padStart(2, '0')}/${p[2]}`; 
+        } else if (fechaNormalizada.includes('/')) {
+            let p = fechaNormalizada.split('/');
+            displayDate = `${p[0].padStart(2, '0')}/${p[1].padStart(2, '0')}/${p[2]}`;
+        }
+
+        let badgeClass = est === 'VENCIDO' ? 'bg-red-50 text-red-700 border-red-200' : 
+                         est === 'POR_VENCER' ? 'bg-yellow-50 text-yellow-800 border-yellow-200' : 
+                         'bg-green-50 text-green-700 border-green-200';
+        
+        let dotColor = est === 'VENCIDO' ? '#ef4444' : est === 'POR_VENCER' ? '#eab308' : '#22c55e';
+
+        return `
+        <div class="flex justify-between items-center bg-white border border-gray-200 px-2.5 py-1.5 rounded-lg shadow-sm hover:border-gray-300 transition-colors">
+            <span class="text-[10px] font-black text-gray-700 uppercase tracking-wide">${tipo} <span class="text-gray-400 font-bold">(${unidad})</span></span>
+            <div class="flex items-center gap-1.5 border px-1.5 py-0.5 rounded-md ${badgeClass}">
+                <span class="w-1.5 h-1.5 rounded-full shadow-sm" style="background-color: ${dotColor};"></span>
+                <span class="text-[10px] font-mono font-bold tracking-tight">${displayDate}</span>
+            </div>
+        </div>`;
+    };
+        
     function getValDiaGlobal(diasObj, dateObj) {
         if (!diasObj) return '';
         let strDias = diasObj[getTabNameFromDate(dateObj)];
@@ -834,39 +903,6 @@ window.toggleVencimientosUnidad = function(safeId) {
         panel.classList.remove('expand-anim');
         icon.style.transform = 'rotate(0deg)';
     }
-};
-
-window.renderBadgeUnidad = function(fechaStr, tipo, unidad, fBaseObj) {
-    if (!fechaStr || fechaStr === '-' || fechaStr.trim() === '') {
-        return `
-        <div class="flex justify-between items-center bg-white border border-gray-100 px-2.5 py-1.5 rounded-lg shadow-sm opacity-60">
-            <span class="text-[10px] font-black text-gray-400 uppercase tracking-wide">${tipo} <span class="font-bold">(${unidad})</span></span>
-            <span class="text-[10px] font-bold text-gray-400 border border-gray-200 px-1.5 py-0.5 rounded-md">S/D</span>
-        </div>`;
-    }
-
-    let fechaNormalizada = fechaStr;
-    if (fechaStr.includes('/')) {
-        let partes = fechaStr.split('/');
-        if (partes.length === 3) fechaNormalizada = `${partes[2]}-${partes[1]}-${partes[0]}`;
-    }
-
-    let est = evaluarEstadoDoc(fechaNormalizada, fBaseObj);
-    let badgeClass = est === 'VENCIDO' ? 'bg-red-50 text-red-700 border-red-200' : 
-                     est === 'POR_VENCER' ? 'bg-yellow-50 text-yellow-800 border-yellow-200' : 
-                     'bg-green-50 text-green-700 border-green-200';
-    
-    let dotColor = est === 'VENCIDO' ? '#ef4444' : est === 'POR_VENCER' ? '#eab308' : '#22c55e';
-    let displayDate = fechaNormalizada.split('-').reverse().join('/');
-
-    return `
-    <div class="flex justify-between items-center bg-white border border-gray-200 px-2.5 py-1.5 rounded-lg shadow-sm hover:border-gray-300 transition-colors">
-        <span class="text-[10px] font-black text-gray-700 uppercase tracking-wide">${tipo} <span class="text-gray-400 font-bold">(${unidad})</span></span>
-        <div class="flex items-center gap-1.5 border px-1.5 py-0.5 rounded-md ${badgeClass}">
-            <span class="w-1.5 h-1.5 rounded-full shadow-sm" style="background-color: ${dotColor};"></span>
-            <span class="text-[10px] font-mono font-bold tracking-tight">${displayDate}</span>
-        </div>
-    </div>`;
 };
 
 function filtrarTabla() {
