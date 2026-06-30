@@ -39,14 +39,6 @@
     transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-/* Indicadores de TD en la esquina (Círculos con stroke) */
-.td-dot {
-    width: 7px;
-    height: 7px;
-    border-radius: 9999px;
-    border: 1px solid rgba(0, 0, 0, 0.4); /* Stroke oscuro para contraste en fondos claros */
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
-}
 
 /* Estado de Selección (Halo de contraste) */
 .celda-calendario.seleccionada {
@@ -237,66 +229,34 @@ window.procesarLogin = function() {
     btn.disabled = true;
     errorBox.classList.add('hidden');
 
-    // PATRÓN HÍBRIDO: Determinar entorno de ejecución
-    if (typeof google !== 'undefined' && google.script && google.script.run) {
-        
-        // --- 1. ENTORNO NATIVO (App Script /exec) ---
-        google.script.run
-            .withSuccessHandler(function(res) {
-                if (res.success) {
-                    sessionStorage.setItem('eor_session_token', res.token);
-                    sessionStorage.setItem('eor_session_role', res.rol);
-                    localStorage.setItem('usuarioActivo', user); 
-                    desbloquearSistema();
-                } else {
-                    errorBox.innerText = res.error || "Credenciales incorrectas.";
-                    errorBox.classList.remove('hidden');
-                }
-                btn.innerHTML = "Ingresar al Sistema";
-                btn.disabled = false;
-            })
-            .withFailureHandler(function(err) {
-                errorBox.innerText = "Error de red. Intente nuevamente.";
-                errorBox.classList.remove('hidden');
-                btn.innerHTML = "Ingresar al Sistema";
-                btn.disabled = false;
-            })
-            .validarLogin(user, pass);
-            
-    } else {
-        
-        // --- 2. ENTORNO EXTERNO (Render, Vercel, Localhost) ---
-        fetch(API_URL, {
-            method: 'POST',
-            headers: {
-                "Content-Type": "text/plain;charset=utf-8" 
-            },
-            body: JSON.stringify({ action: 'login', usuario: user, password: pass })
-        })
-        .then(res => res.json())
-        .then(res => {
-            if (res.success) {
-                sessionStorage.setItem('eor_session_token', res.token);
-                sessionStorage.setItem('eor_session_role', res.rol);
-                localStorage.setItem('usuarioActivo', user); 
-                desbloquearSistema();
-            } else {
-                errorBox.innerText = res.error || "Acceso denegado.";
-                errorBox.classList.remove('hidden');
-            }
-        })
-        .catch(err => {
-            errorBox.innerText = "Error de red. Intente nuevamente.";
+    // Conexión Directa a Node.js
+    fetch(API_URL, {
+        method: 'POST',
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: 'login', usuario: user, password: pass })
+    })
+    .then(res => res.json())
+    .then(res => {
+        if (res.success) {
+            sessionStorage.setItem('eor_session_token', res.token);
+            sessionStorage.setItem('eor_session_role', res.rol);
+            localStorage.setItem('usuarioActivo', user); 
+            desbloquearSistema();
+        } else {
+            errorBox.innerText = res.error || "Acceso denegado.";
             errorBox.classList.remove('hidden');
-            console.error("Error en Fetch Login:", err);
-        })
-        .finally(() => {
-            btn.innerHTML = "Ingresar al Sistema";
-            btn.disabled = false;
-        });
-    }
+        }
+    })
+    .catch(err => {
+        errorBox.innerText = "Error de red. Intente nuevamente.";
+        errorBox.classList.remove('hidden');
+        console.error("Error en Fetch Login:", err);
+    })
+    .finally(() => {
+        btn.innerHTML = "Ingresar al Sistema";
+        btn.disabled = false;
+    });
 }
-
 window.sincronizarBackend = function() {
     const btn = document.getElementById('btn-sync-global');
     const icon = document.getElementById('icon-sync-global');
@@ -498,17 +458,6 @@ window.mapearVencimientos = function(patente, jsonVencimientos) {
         ve: record.col_n    
     };
 };
-
-    // --- [TAG: UTILS Y CORE] ---
-
-   
-    // 👉 SOLUCIÓN: Función global elevada para que el caché no colapse
-    window.normalizarNombreTD = function(nom) {
-        return String(nom || "").trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, ' ');
-    };
-    function normalizarNombreTD(nom) {
-        return window.normalizarNombreTD(nom);
-    }
     
     window.parseFechaObs = function(fechaStr) {
         if (!fechaStr || fechaStr === '-') return null;
@@ -550,6 +499,41 @@ window.mapearVencimientos = function(patente, jsonVencimientos) {
         if(diff < 0) return 'VENCIDO';
         if(diff <= 30) return 'POR_VENCER';
         return 'VIGENTE';
+    };
+
+    window.evaluarAlertasUnidad = function(unidadData, fBaseObj) {
+        if (!unidadData) return 'OK';
+        
+        // Escaneamos todas las columnas de la unidad
+        let docs = [
+            unidadData.mass_tr || unidadData.col_g,
+            unidadData.mass_semi || unidadData.col_j,
+            unidadData.vtv_tr || unidadData.col_h,
+            unidadData.vtv_semi || unidadData.col_k,
+            unidadData.esp_es || unidadData.col_l,
+            unidadData.vi || unidadData.col_m,
+            unidadData.ve || unidadData.col_n
+        ];
+        
+        let tieneVencido = false;
+        let tienePorVencer = false;
+        
+        docs.forEach(d => {
+            if (!d || d === '-' || String(d).trim() === '') return;
+            let fechaNormalizada = String(d).trim();
+            // Normalizar fechas tipo dd/mm/yyyy a yyyy-mm-dd para el evaluador
+            if (fechaNormalizada.includes('/')) {
+                let partes = fechaNormalizada.split('/');
+                if (partes.length === 3) fechaNormalizada = `${partes[2]}-${partes[1]}-${partes[0]}`;
+            }
+            let est = window.evaluarEstadoDoc(fechaNormalizada, fBaseObj);
+            if (est === 'VENCIDO') tieneVencido = true;
+            if (est === 'POR_VENCER') tienePorVencer = true;
+        });
+        
+        if (tieneVencido) return 'VENCIDO';
+        if (tienePorVencer) return 'POR_VENCER';
+        return 'OK';
     };
 
     function getValDiaGlobal(diasObj, dateObj) {
@@ -783,17 +767,9 @@ async function cargarDatosDesdeCache() {
         }
 
         // 4. Lógica de normalización de datos (Intacta, porque funciona excelente)
-        const dataTDs = resNode.tds || { campo: {}, infinia: {}, liviano: {}, euro: {}, estados: {}, extra: {} };
         const resDiagramas = typeof resNode.diagramas === 'string' ? JSON.parse(resNode.diagramas) : resNode.diagramas;
 
-        window.tdGlobalData = {
-            campo:   dataTDs.campo || {},
-            infinia: dataTDs.infinia || {},
-            liviano: dataTDs.liviano || {},
-            euro:    dataTDs.euro || {},
-            estados: dataTDs.estados || {},
-            extra:   dataTDs.codigosExtra || {}
-        };
+
 
         const normalize = (obj) => {
             if (!obj) return {};
@@ -1122,7 +1098,7 @@ function renderizarPanelFiltros() {
         contenedor.innerHTML = html;
     }
 
-    function renderizarGrillaDiaria(datos, container) {
+function renderizarGrillaDiaria(datos, container) {
         const fBaseObj = new Date(fechaGlobalContexto + "T12:00:00");
         const targetMes = String(fBaseObj.getMonth() + 1).padStart(2, '0');
         const targetAnio = String(fBaseObj.getFullYear()).slice(-2);
@@ -1149,9 +1125,16 @@ function renderizarPanelFiltros() {
                 }
             }
 
-            let dEst = evaluarEstadoDoc(doc.ven, fBaseObj);
-            let hEst = evaluarEstadoDoc(hab.ven, fBaseObj);
-            let cEst = evaluarEstadoDoc(cert.ven, fBaseObj);
+            let dEst = window.evaluarEstadoDoc(doc.ven, fBaseObj);
+            let hEst = window.evaluarEstadoDoc(hab.ven, fBaseObj);
+            let cEst = window.evaluarEstadoDoc(cert.ven, fBaseObj);
+
+            // 👉 SOLUCION AL ERROR AQUI: Restauradas las variables de los badges de documentación
+            const dot = (c) => `<span class="w-2 h-2 rounded-full shadow-sm shrink-0" style="background-color: ${c}"></span>`;
+            const docCls = "flex items-center gap-2 text-[11px] font-mono font-bold px-2.5 py-1 bg-white rounded-md border border-gray-200 text-gray-700 shadow-sm";
+            let badgeExam = `<div class="${docCls}">${dot(dEst === 'VENCIDO' ? '#ef4444' : dEst === 'POR_VENCER' ? '#eab308' : '#22c55e')} ${formatVen(doc.ven)}</div>`;
+            let badgeLic = `<div class="${docCls}">${dot(hEst === 'VENCIDO' ? '#ef4444' : hEst === 'POR_VENCER' ? '#eab308' : '#22c55e')} ${formatVen(hab.ven)}</div>`;
+            let badgeCert = `<div class="${docCls}">${dot(cEst === 'VENCIDO' ? '#ef4444' : cEst === 'POR_VENCER' ? '#eab308' : '#22c55e')} ${formatVen(cert.ven)}</div>`;
 
             let fCicloInicio = new Date(fBaseObj.getFullYear(), fBaseObj.getMonth() - 1, 26, 12, 0, 0);
             let fCicloFin = new Date(fBaseObj.getFullYear(), fBaseObj.getMonth(), 25, 12, 0, 0);
@@ -1220,6 +1203,24 @@ function renderizarPanelFiltros() {
                 totalKm += window.obtenerKmDia(item.nom, formatIsoShort(d));
             }
 
+            // ==========================================
+            // 🚨 ANÁLISIS DE ALERTAS (NUEVO)
+            // ==========================================
+            let unidadData = (window.unidadesGlobales && window.unidadesGlobales[item.tractor]) || {};
+            try {
+                let cache = window.vencimientosCacheGlobal;
+                if (cache && typeof cache === 'string') { cache = JSON.parse(cache); }
+                if (cache && Array.isArray(cache) && item.tractor) {
+                    let datosVencimientos = window.mapearVencimientos(item.tractor, cache);
+                    if (datosVencimientos) { unidadData = { ...unidadData, ...datosVencimientos }; }
+                }
+            } catch (error) {}
+
+            let estadoAlertaUnidad = 'OK';
+            if (typeof window.evaluarAlertasUnidad === 'function') {
+                estadoAlertaUnidad = window.evaluarAlertasUnidad(unidadData, fBaseObj);
+            }
+
             let alertasMinimalistas = '';
             if (item._diaRetornoObj) {
                 let retIso = formatIsoShort(item._diaRetornoObj);
@@ -1233,16 +1234,41 @@ function renderizarPanelFiltros() {
             if(dEst === 'VENCIDO' || hEst === 'VENCIDO' || cEst === 'VENCIDO') alertasMinimalistas += `<span class="px-2 py-1 rounded-md text-[10px] font-bold bg-red-100 text-red-700 border border-red-300">🔴 DOCS</span> `;
             else if(dEst === 'POR_VENCER' || hEst === 'POR_VENCER' || cEst === 'POR_VENCER') alertasMinimalistas += `<span class="px-2 py-1 rounded-md text-[10px] font-bold bg-yellow-100 text-yellow-800 border border-yellow-300">🟡 DOCS</span> `;
 
-            const dot = (c) => `<span class="w-2 h-2 rounded-full shadow-sm shrink-0" style="background-color: ${c}"></span>`;
-            const docCls = "flex items-center gap-2 text-[11px] font-mono font-bold px-2.5 py-1 bg-white rounded-md border border-gray-200 text-gray-700 shadow-sm";
-            
-            let badgeExam = `<div class="${docCls}">${dot(dEst === 'VENCIDO' ? '#ef4444' : dEst === 'POR_VENCER' ? '#eab308' : '#22c55e')} ${formatVen(doc.ven)}</div>`;
-            let badgeLic = `<div class="${docCls}">${dot(hEst === 'VENCIDO' ? '#ef4444' : hEst === 'POR_VENCER' ? '#eab308' : '#22c55e')} ${formatVen(hab.ven)}</div>`;
-            let badgeCert = `<div class="${docCls}">${dot(cEst === 'VENCIDO' ? '#ef4444' : cEst === 'POR_VENCER' ? '#eab308' : '#22c55e')} ${formatVen(cert.ven)}</div>`;
+            // Placa alerta UNIDAD en la cabecera
+            if (estadoAlertaUnidad === 'VENCIDO') alertasMinimalistas += `<span class="px-2 py-1 rounded-md text-[10px] font-bold bg-red-100 text-red-700 border border-red-300 shadow-sm" title="Vencimientos en la Unidad">🚚 UNIDAD</span> `;
+            else if (estadoAlertaUnidad === 'POR_VENCER') alertasMinimalistas += `<span class="px-2 py-1 rounded-md text-[10px] font-bold bg-yellow-100 text-yellow-800 border border-yellow-300 shadow-sm" title="Vencimientos próximos en la Unidad">🚚 UNIDAD</span> `;
 
             const theme = getSrvTheme(item.srv);
 
-html += `
+            // 🎨 Estilos Condicionales para el botón del acordeón de Unidad
+            let barraUnidadHtml = '';
+            if (estadoAlertaUnidad === 'VENCIDO') {
+                barraUnidadHtml = `
+                <div class="bg-red-50 border-x border-b border-red-200 rounded-b-xl hover:bg-red-100 transition-colors cursor-pointer flex justify-center items-center py-2 group shadow-sm z-0 relative -mt-1 animate-pulse" onclick="toggleVencimientosUnidad('${item._safeId}')">
+                    <span class="text-[9px] font-black text-red-600 uppercase tracking-widest flex items-center gap-1.5">
+                        🔴 Alerta Unidad: Documentación Vencida 
+                        <svg id="icon-venc-unidad-${item._safeId}" class="w-3.5 h-3.5 transition-transform duration-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M19 9l-7 7-7-7"></path></svg>
+                    </span>
+                </div>`;
+            } else if (estadoAlertaUnidad === 'POR_VENCER') {
+                barraUnidadHtml = `
+                <div class="bg-yellow-50 border-x border-b border-yellow-200 rounded-b-xl hover:bg-yellow-100 transition-colors cursor-pointer flex justify-center items-center py-2 group shadow-sm z-0 relative -mt-1" onclick="toggleVencimientosUnidad('${item._safeId}')">
+                    <span class="text-[9px] font-black text-yellow-700 uppercase tracking-widest flex items-center gap-1.5">
+                        🟡 Alerta Unidad: Vencimiento Próximo 
+                        <svg id="icon-venc-unidad-${item._safeId}" class="w-3.5 h-3.5 transition-transform duration-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M19 9l-7 7-7-7"></path></svg>
+                    </span>
+                </div>`;
+            } else {
+                barraUnidadHtml = `
+                <div class="bg-slate-100 border-x border-b border-slate-200 rounded-b-xl hover:bg-slate-200/80 transition-colors cursor-pointer flex justify-center items-center py-2 group shadow-sm z-0 relative -mt-1" onclick="toggleVencimientosUnidad('${item._safeId}')">
+                    <span class="text-[9px] font-black text-slate-500 uppercase tracking-widest group-hover:text-primary transition-colors flex items-center gap-1.5">
+                        Documentación Unidad (VTV / MASS) 
+                        <svg id="icon-venc-unidad-${item._safeId}" class="w-3.5 h-3.5 transition-transform duration-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M19 9l-7 7-7-7"></path></svg>
+                    </span>
+                </div>`;
+            }
+
+            html += `
             <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden hover:shadow-md transition-shadow">
                 <div class="p-3 sm:p-4 cursor-pointer select-none" onclick="toggleDetalle('${item._safeId}')">
                     <div class="flex flex-col lg:grid lg:grid-cols-12 gap-3 items-start lg:items-center w-full">
@@ -1265,14 +1291,6 @@ html += `
                             </div>
                             
                             <div class="lg:col-span-2 flex items-center justify-end gap-3 shrink-0">
-                                ${item.td && String(item.td).trim() !== "" && String(item.td).trim() !== "-" ? `
-                                <div onclick="copiarAlPortapapeles('${item.td}', event)" title="Copiar TD" 
-                                     class="cursor-pointer transition-all hover:scale-105 border border-gray-400/50 rounded-md px-1.5 py-1 text-[10px] font-black tracking-widest flex items-center shadow-sm mr-1 gap-1.5"
-                                     style="background-image: linear-gradient(135deg, ${String(item.hex_1 || item.hex1 || '').trim() || '#ffffff'} 50%, ${String(item.hex_2 || item.hex2 || '').trim() || '#e5e7eb'} 50%) !important;">
-                                     <span class="text-gray-000 font-bold uppercase text-[8px] [text-shadow:_0_0_3px_#fff,_0_0_3px_#fff]">TD</span>
-                                     <span class="text-gray-000 font-mono [text-shadow:_0_0_3px_#fff,_0_0_3px_#fff]">${item.td}</span>
-                                </div>
-                                ` : ''}
                                 <div class="${bgEstado} px-4 py-1.5 rounded-lg text-sm font-black text-center min-w-[3.5rem] flex flex-col items-center justify-center leading-none shadow-sm">
                                     ${contenidoBadge}
                                 </div>
@@ -1317,14 +1335,35 @@ html += `
                         
                     </div>
 
-                    <div id="td-info-${item._safeId}" class="mt-2.5 pt-2.5 border-t border-gray-200/60 w-full flex flex-col gap-2">
+                    ${barraUnidadHtml}
+
+                    <div id="venc-unidad-${item._safeId}" class="hidden bg-white border border-slate-200 rounded-xl mt-3 p-4 shadow-sm">
+                        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                            <div class="flex flex-col gap-2 bg-gray-50 p-3 rounded-xl border border-gray-100 shadow-inner">
+                                <span class="text-[9px] font-black text-indigo-400 uppercase tracking-widest mb-1 border-b border-gray-200 pb-1.5 text-center flex justify-center items-center gap-1"><svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path></svg> MASS</span>
+                                ${window.renderBadgeUnidad(unidadData.mass_tr || unidadData.col_g, 'MASS', 'TR', fBaseObj)}
+                                ${window.renderBadgeUnidad(unidadData.mass_semi || unidadData.col_j, 'MASS', 'SE', fBaseObj)}
+                            </div>
+                            <div class="flex flex-col gap-2 bg-gray-50 p-3 rounded-xl border border-gray-100 shadow-inner">
+                                <span class="text-[9px] font-black text-blue-400 uppercase tracking-widest mb-1 border-b border-gray-200 pb-1.5 text-center flex justify-center items-center gap-1"><svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"></path></svg> VTV / RTO</span>
+                                ${window.renderBadgeUnidad(unidadData.vtv_tr || unidadData.col_h, 'VTV', 'TR', fBaseObj)}
+                                ${window.renderBadgeUnidad(unidadData.vtv_semi || unidadData.col_k, 'VTV', 'SE', fBaseObj)}
+                            </div>
+                            <div class="flex flex-col gap-2 bg-gray-50 p-3 rounded-xl border border-gray-100 shadow-inner">
+                                <span class="text-[9px] font-black text-purple-400 uppercase tracking-widest mb-1 border-b border-gray-200 pb-1.5 text-center flex justify-center items-center gap-1"><svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path></svg> CERTIFICADOS EXTRA</span>
+                                ${window.renderBadgeUnidad(unidadData.esp_es || unidadData.col_l, 'ESP-ES', 'TR', fBaseObj)}
+                                ${window.renderBadgeUnidad(unidadData.vi || unidadData.col_m, 'VI', 'TR', fBaseObj)}
+                                ${window.renderBadgeUnidad(unidadData.ve || unidadData.col_n, 'VE', 'TR', fBaseObj)}
+                            </div>
+                        </div>
                     </div>
 
                 </div>
             </div>`;
-                    });
+        });
         html += `</div>`;
-        window.actualizarSinBlink('contenedor-lista-principal', html);    }
+        window.actualizarSinBlink('contenedor-lista-principal', html);    
+    }
 
     window.toggleDetalle = function(id) {
         const d = document.getElementById(`detalle-${id}`); const i = document.getElementById(`icon-chevron-${id}`);
@@ -1708,8 +1747,10 @@ window.mostrarDetalleConductor = function(safeId, mantenerSeleccion = false) {
         avatarHtml = `<img src="https://ui-avatars.com/api/?name=${encodeURIComponent(chofer.nom)}&background=e0e7ff&color=19407E&bold=true&size=256" class="${commonImgClasses}" alt="Avatar de ${chofer.nom}">`;
     }
 
+    // ==========================================
+    // 🚨 ANÁLISIS DE ALERTAS DE UNIDAD (NUEVO)
+    // ==========================================
     let unidadData = (window.unidadesGlobales && window.unidadesGlobales[chofer.tractor]) || {};
-
     try {
         let cache = window.vencimientosCacheGlobal;
         if (cache && typeof cache === 'string') { cache = JSON.parse(cache); }
@@ -1718,6 +1759,20 @@ window.mostrarDetalleConductor = function(safeId, mantenerSeleccion = false) {
             if (datosVencimientos) { unidadData = { ...unidadData, ...datosVencimientos }; }
         }
     } catch (error) { console.error("Error UI al procesar vencimientos de la unidad:", error); }
+
+    let estadoAlertaUnidad = 'OK';
+    if (typeof window.evaluarAlertasUnidad === 'function') {
+        estadoAlertaUnidad = window.evaluarAlertasUnidad(unidadData, fBaseObj);
+    }
+
+    let badgeUnidadHtml = '';
+    if (estadoAlertaUnidad === 'VENCIDO') {
+        badgeUnidadHtml = `<span class="px-2.5 py-1 bg-red-100 text-red-800 rounded-lg text-[10px] font-black border border-red-300 shadow-sm animate-pulse whitespace-nowrap">🚚 VENCIDO</span>`;
+    } else if (estadoAlertaUnidad === 'POR_VENCER') {
+        badgeUnidadHtml = `<span class="px-2.5 py-1 bg-yellow-100 text-yellow-800 rounded-lg text-[10px] font-black border border-yellow-300 shadow-sm whitespace-nowrap">🚚 POR VENCER</span>`;
+    }
+
+    let separadorTopRight = (badgeFatiga || badgeUnidadHtml) ? `<div class="w-px h-8 bg-gray-200 hidden sm:block"></div>` : '';
 
     let html = `
     <div class="col-span-12 bg-white p-5 sm:p-6 rounded-xl shadow-sm border border-gray-200 flex flex-col md:flex-row gap-5 w-full items-stretch">
@@ -1745,7 +1800,12 @@ window.mostrarDetalleConductor = function(safeId, mantenerSeleccion = false) {
                 <div class="flex flex-wrap items-stretch gap-3 w-full xl:w-auto justify-start xl:justify-end">
                     <div class="flex items-center gap-3 bg-gray-50 p-2.5 rounded-xl border border-gray-100 shrink-0 justify-center min-w-[150px]">
                         <div class="text-center shrink-0 px-2"><span class="block text-2xl font-black text-gray-800 leading-none">${estadoDiaRaw || '-'}</span><span class="text-[9px] uppercase font-bold text-gray-400 tracking-wider">Día ${fBaseObj.getDate()}</span></div>
-                        ${badgeFatiga ? `<div class="w-px h-8 bg-gray-200 hidden sm:block"></div><div class="flex flex-col gap-1.5 flex-1 min-w-[120px] pr-1"><div class="flex gap-1.5 justify-center">${badgeFatiga}</div></div>` : ''}
+                        ${separadorTopRight}
+                        ${(badgeFatiga || badgeUnidadHtml) ? `
+                        <div class="flex flex-col gap-1.5 flex-1 pr-1 items-center justify-center">
+                            ${badgeFatiga ? `<div>${badgeFatiga}</div>` : ''}
+                            ${badgeUnidadHtml ? `<div>${badgeUnidadHtml}</div>` : ''}
+                        </div>` : ''}
                     </div>
                     <div class="bg-[#fff9e6] p-2.5 rounded-xl border border-[#ffe599] flex flex-col justify-center items-center shadow-sm shrink-0 min-w-[100px]">
                         <span class="text-[10px] font-black text-yellow-700 uppercase tracking-widest mb-0.5 text-center">Vacaciones</span>
@@ -1797,12 +1857,28 @@ window.mostrarDetalleConductor = function(safeId, mantenerSeleccion = false) {
                     <div class="flex flex-col"><span class="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1.5">Servicio</span><div><span class="inline-block ${theme.softBg} ${theme.softText} border ${theme.border} px-2 py-0.5 rounded font-black text-sm shadow-sm tracking-wide">${chofer.srv || '-'}</span></div></div>
                 </div>
 
+                ${estadoAlertaUnidad === 'VENCIDO' ? `
+                <div class="bg-red-50 border-x border-b border-red-200 rounded-b-xl hover:bg-red-100 transition-colors cursor-pointer flex justify-center items-center py-2 group shadow-sm z-0 relative -mt-1 animate-pulse" onclick="toggleVencimientosUnidad('${chofer._safeId}')">
+                    <span class="text-[9px] font-black text-red-600 uppercase tracking-widest flex items-center gap-1.5">
+                        🔴 Alerta Unidad: Documentación Vencida 
+                        <svg id="icon-venc-unidad-${chofer._safeId}" class="w-3.5 h-3.5 transition-transform duration-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M19 9l-7 7-7-7"></path></svg>
+                    </span>
+                </div>
+                ` : estadoAlertaUnidad === 'POR_VENCER' ? `
+                <div class="bg-yellow-50 border-x border-b border-yellow-200 rounded-b-xl hover:bg-yellow-100 transition-colors cursor-pointer flex justify-center items-center py-2 group shadow-sm z-0 relative -mt-1" onclick="toggleVencimientosUnidad('${chofer._safeId}')">
+                    <span class="text-[9px] font-black text-yellow-700 uppercase tracking-widest flex items-center gap-1.5">
+                        🟡 Alerta Unidad: Vencimiento Próximo 
+                        <svg id="icon-venc-unidad-${chofer._safeId}" class="w-3.5 h-3.5 transition-transform duration-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M19 9l-7 7-7-7"></path></svg>
+                    </span>
+                </div>
+                ` : `
                 <div class="bg-slate-100 border-x border-b border-slate-200 rounded-b-xl hover:bg-slate-200/80 transition-colors cursor-pointer flex justify-center items-center py-2 group shadow-sm z-0 relative -mt-1" onclick="toggleVencimientosUnidad('${chofer._safeId}')">
                     <span class="text-[9px] font-black text-slate-500 uppercase tracking-widest group-hover:text-primary transition-colors flex items-center gap-1.5">
                         Documentación Unidad (VTV / MASS) 
                         <svg id="icon-venc-unidad-${chofer._safeId}" class="w-3.5 h-3.5 transition-transform duration-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M19 9l-7 7-7-7"></path></svg>
                     </span>
                 </div>
+                `}
 
                 <div id="venc-unidad-${chofer._safeId}" class="hidden bg-white border border-slate-200 rounded-xl mt-3 p-4 shadow-sm">
                     <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -3137,7 +3213,6 @@ window.actualizarSinBlink = function(elementoId, nuevoHTML) {
 
 <script src="https://unpkg.com/morphdom@2.7.1/dist/morphdom-umd.min.js"></script>
 <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
-<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
   
 <script>
     // 2. Nos conectamos al servidor en tiempo real
@@ -3148,15 +3223,7 @@ window.actualizarSinBlink = function(elementoId, nuevoHTML) {
     // 3. Escuchamos el evento mágico
     socket.on('datos_actualizados', (data) => {
         try {
-            // --- PASO 1: ACTUALIZACIÓN DE MEMORIA (0 milisegundos) ---
-            window.tdGlobalData = {
-                campo: data.tds.campo || {}, 
-                infinia: data.tds.infinia || {},
-                liviano: data.tds.liviano || {}, 
-                euro: data.tds.euro || {},
-                estados: data.tds.estados || {}, 
-                extra: data.tds.codigosExtra || {}
-            };
+
 
             const dataDiag = typeof data.diagramas === 'string' ? JSON.parse(data.diagramas) : data.diagramas;
             
