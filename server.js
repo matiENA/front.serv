@@ -11,7 +11,16 @@ const app = express();
 app.use(compression()); 
 
 const server = http.createServer(app); 
-const io = new Server(server, { cors: { origin: "*", methods: ["GET", "POST"] } });
+
+// 👉 CONFIGURACIÓN ACTUALIZADA DE SOCKET.IO PARA EVITAR ERROR CORS Y 502
+const io = new Server(server, { 
+    cors: { 
+        origin: ["https://diagramas-hp1p.onrender.com", "http://localhost:3000", "*"], 
+        methods: ["GET", "POST"],
+        credentials: true
+    },
+    transports: ['websocket', 'polling']
+});
 
 app.use(cors({
     origin: '*',
@@ -103,26 +112,135 @@ async function actualizarCacheDesdeGoogle(esArranque = false) {
         };
 
         let listaChoferesMaestros = [];
-        try {
-            const rowsH1 = await fetchRango(ID_SPREADSHEET_MASTER, "'choferes y unidades'!H1");
-            if (rowsH1 && rowsH1.length > 0 && rowsH1[0][0]) {
-                let jsonRaw = String(rowsH1[0][0]).trim();
-                let parsedChoferes = JSON.parse(jsonRaw);
-                parsedChoferes.forEach(c => {
-                    if(!c.nombre) return;
-                    let nombreReal = String(c.nombre).trim(); let norm = normalizar(nombreReal);
-                    resDiagGAS.flota[norm] = { tractor: c.tractor || '', semi: c.semi || '', servicio: c.servicio || '', n_ute: c.n_ute || '', td: c.td || '-', hex1: c.hex1 || '', hex2: c.hex2 || '' };
-                    if (!listaChoferesMaestros.some(x => x.norm === norm)) { listaChoferesMaestros.push({ nombre: nombreReal, norm: norm }); }
-                });
-            }
-        } catch(e) {}
-
+        
 // ==========================================
+        // 🚚 1. CONSTRUCCIÓN DE LA FLOTA EN RAM (Reemplazo del JSON H1)
+        // ==========================================
+        try {
+            let hoy = new Date();
+            let anio = hoy.getFullYear();
+            let mesStr = String(hoy.getMonth() + 1).padStart(2, '0');
+            let nombreHojaActual = mesesAbrev[hoy.getMonth()] + "-" + String(anio).slice(-2);
+
+            // A) Leer el diagrama actual para obtener todos los choferes y sus SERVICIOS (Columna C)
+            const rowsDiagActual = await fetchRango(ID_SPREADSHEET_DIAGRAMAS, `'${nombreHojaActual}'!A6:C255`);
+            rowsDiagActual.forEach(row => {
+                let cellNombre = row[1]; 
+                let cellServicio = row[2]; 
+                if (cellNombre && cellNombre !== "APELLIDO Y NOMBRE" && cellNombre !== "Personal Activo") {
+                    let norm = normalizar(cellNombre);
+                    if (!resDiagGAS.flota[norm]) {
+                        resDiagGAS.flota[norm] = { tractor: '', semi: '', servicio: cellServicio || 'S/A', n_ute: '', td: '-', hex1: '', hex2: '' };
+                        listaChoferesMaestros.push({ nombre: String(cellNombre).trim(), norm: norm });
+                    }
+                }
+            });
+
+            // B) Buscar la pestaña real (ya que le cambian el nombre al mes, ej: "JUNIO 2026- Mov...")
+            let nombrePestañaMov = "Mov.Unidades y Choferes";
+            try {
+                const resMeta = await serviceAccountAuth.request({ url: `https://sheets.googleapis.com/v4/spreadsheets/${ID_SHEET_MOVIMIENTOS}` });
+                let sheets = resMeta.data.sheets || [];
+                for (let s of sheets) {
+                    if (s.properties.title.includes("Mov.Unidades y Choferes")) {
+                        nombrePestañaMov = s.properties.title;
+                        break;
+                    }
+                }
+            } catch(e) { console.warn("No se pudo obtener meta-data de Movimientos, usando nombre por defecto."); }
+
+            // C) Leer la pestaña y hacer el cruce de Unidades
+            const rowsMov = await fetchRango(ID_SHEET_MOVIMIENTOS, `'${nombrePestañaMov}'!A1:ZZ300`);
+            if (rowsMov.length > 0) {
+                let headers = rowsMov[0];
+                let targetD = hoy.getDate(); 
+                let targetM = hoy.getMonth(); 
+                let targetY = hoy.getFullYear();
+                const mesesLargo = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
+                
+                let regexFechaTexto = new RegExp(`\\b0?${targetD}[\\s/]+${mesesLargo[targetM]}[\\s/]+${targetY}\\b`, 'i');
+                let colFecha = -1;
+                let colNombreActivos = -1;
+
+                // 1. Intentar encontrar la columna de HOY
+                for (let c = 0; c < headers.length; c++) {
+                    let strVal = String(headers[c] || "").toLowerCase().trim();
+                    if (regexFechaTexto.test(strVal) || 
+                        strVal === `${String(targetD).padStart(2,'0')}/${String(targetM+1).padStart(2,'0')}/${targetY}` || 
+                        strVal === `${targetD}/${targetM+1}/${targetY}`) { 
+                        colFecha = c; 
+                        break; 
+                    }
+                }
+
+                if (colFecha !== -1 && colFecha >= 3) {
+                    colNombreActivos = colFecha - 3;
+                } else {
+                    // 2. BACKUP VITAL: Si no crearon la columna de hoy, usamos la ÚLTIMA lista de asignaciones creada
+                    console.warn(`⚠️ Columna del ${targetD} de ${mesesLargo[targetM]} no encontrada. Buscando la última asignación disponible...`);
+                    for (let c = headers.length - 1; c >= 3; c--) {
+                        let strVal = String(headers[c] || "").toLowerCase().trim();
+                        if (strVal === "chofer") {
+                            colNombreActivos = c;
+                            break;
+                        }
+                    }
+                }
+
+                if (colNombreActivos !== -1) {
+                    for (let i = 2; i < rowsMov.length; i++) {
+                        let nombreMovOriginal = String(rowsMov[i][colNombreActivos] || "").trim();
+                        if (!nombreMovOriginal || nombreMovOriginal === "1") continue;
+                        if (!/[a-zA-ZáéíóúÁÉÍÓÚñÑ]/.test(nombreMovOriginal)) continue;
+
+                        let norm = normalizar(nombreMovOriginal);
+                        
+                        if (resDiagGAS.flota[norm]) {
+                            resDiagGAS.flota[norm].n_ute = String(rowsMov[i][2] || "").trim(); 
+                            resDiagGAS.flota[norm].tractor = String(rowsMov[i][4] || "").trim(); 
+                            resDiagGAS.flota[norm].semi = String(rowsMov[i][5] || "").trim(); 
+                        } else {
+                            resDiagGAS.flota[norm] = { 
+                                tractor: String(rowsMov[i][4] || "").trim(), 
+                                semi: String(rowsMov[i][5] || "").trim(), 
+                                servicio: 'S/A', 
+                                n_ute: String(rowsMov[i][2] || "").trim(), 
+                                td: '-', hex1: '', hex2: '' 
+                            };
+                            listaChoferesMaestros.push({ nombre: nombreMovOriginal, norm: norm });
+                        }
+                    }
+                } else {
+                    console.warn("⚠️ ERROR CRÍTICO: No se encontró la columna 'Chofer' en la planilla de Movimientos.");
+                }
+            }
+
+            // D) Leer 'Tabla de viajes' para obtener TD y HEX (Colores)
+            const rowsTV = await fetchRango(ID_SHEET_MOVIMIENTOS, "'Tabla de viajes'!D2:G200");
+            let mapaTD = {};
+            rowsTV.forEach(row => {
+                let tractor = String(row[0] || "").trim(); // Columna D
+                let td = String(row[1] || "").trim();      // Columna E
+                let hex = String(row[3] || "").trim();     // Columna G
+                if (tractor) { mapaTD[tractor] = { td: td, hex: hex }; }
+            });
+            
+            for (let key in resDiagGAS.flota) {
+                let tr = resDiagGAS.flota[key].tractor;
+                if (tr && mapaTD[tr]) {
+                    resDiagGAS.flota[key].td = mapaTD[tr].td;
+                    resDiagGAS.flota[key].hex1 = mapaTD[tr].hex;
+                    resDiagGAS.flota[key].hex2 = mapaTD[tr].hex;
+                }
+            }
+            console.log(`✅ Flota ensamblada en RAM: ${listaChoferesMaestros.length} choferes vinculados a sus unidades diarias.`);
+        } catch (e) { console.error("❌ Error construyendo la Flota en RAM:", e); }
+        
+        // ==========================================
         // 🪪 MOTOR DE RASTREO MAESTRO (Planilla LEGAJOS vía IMPORTRANGE)
         // ==========================================
         let dnisMap = {}; let telefonosMap = {};
         try {
-            // 👉 Lee de la pestaña 'LEGAJOS' que creaste en el Master Sheet
             const rowsLegajos = await fetchRango(ID_SPREADSHEET_MASTER, "'LEGAJOS'!A2:P350");
             
             if (rowsLegajos && rowsLegajos.length > 0) {
@@ -163,12 +281,12 @@ async function actualizarCacheDesdeGoogle(esArranque = false) {
 
         resDiagGAS.dnis = dnisMap; resDiagGAS.telefonos = telefonosMap;
 
-// ==========================================
+        // ==========================================
         // 🩺 EXTRACCIÓN DE APTOS MÉDICOS (Dinámico Diario)
         // ==========================================
         try {
-            // 👉 RANGO ABIERTO HASTA 'ZZ' PARA SOPORTAR COLUMNAS INFINITAS
-            const rowsAptos = await fetchRango(ID_SHEET_APTOS_MEDICOS, "'Seguimiento Avalados Mensual'!A1:ZZ500");
+            // 👉 RANGO LIMITADO A 'DZ' (130 columnas) PARA NO SATURAR LA RAM DE RENDER
+            const rowsAptos = await fetchRango(ID_SHEET_APTOS_MEDICOS, "'Seguimiento Avalados Mensual'!A1:DZ500");
             resDiagGAS.aptosMedicos = {};
             
             if (rowsAptos.length > 0) {
@@ -179,16 +297,13 @@ async function actualizarCacheDesdeGoogle(esArranque = false) {
                 const y = hoy.getFullYear();
                 const mesesLargo = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
                 
-                // Formatos posibles que usan en las columnas (Ej: "29/junio/2026")
                 const formatosHoy = [`${hoy.getDate()}/${mesesLargo[hoy.getMonth()]}/${y}`.toLowerCase(), `${d}/${m}/${y}`, `${d}/${m}`, String(hoy.getDate())];
 
                 let colDiaria = -1;
-                // 1. Buscamos si ya crearon la columna con la fecha exacta de HOY
                 for (let c = 12; c < headers.length; c++) { 
                     if (formatosHoy.includes(String(headers[c] || "").trim().toLowerCase())) { colDiaria = c; break; } 
                 }
                 
-                // 2. Si no la crearon (ej. fin de semana), tomamos la ÚLTIMA columna que exista
                 if (colDiaria === -1) { 
                     for (let c = headers.length - 1; c >= 12; c--) { 
                         if (String(headers[c] || "").trim() !== "") { colDiaria = c; break; } 
@@ -209,22 +324,19 @@ async function actualizarCacheDesdeGoogle(esArranque = false) {
                     let estadoDiario = "-"; 
                     let limiteBusqueda = colDiaria > -1 ? colDiaria : fila.length - 1;
                     
-                    // 3. Escáner hacia atrás: Busca el ÚLTIMO estado cargado para este chofer
                     for (let c = limiteBusqueda; c >= 12; c--) { 
                         let val = String(fila[c] || "").trim(); 
                         if (val !== "" && val !== "-") { estadoDiario = val; break; } 
                     }
                     
                     let nombreNormalizado = nombreRaw.replace(/,/g, '').toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, ' ').replace(/\s+/g, ' ');
-                    
-                    // Guardamos la columna C como "Estado General"
                     let estadoGeneral = String(fila[2] || "").trim();
 
                     let objApto = { 
                         dni: dniLimpio, 
                         cuil: cuil, 
                         estadoGeneral: estadoGeneral, 
-                        estado: estadoDiario, // El estado de la última columna de la derecha
+                        estado: estadoDiario, 
                         responsable: fila[5] || "", 
                         observaciones: fila[10] || "", 
                         observaciones_sector_salud: fila[11] || "" 
@@ -235,6 +347,7 @@ async function actualizarCacheDesdeGoogle(esArranque = false) {
                 }
             }
         } catch (e) { console.error("❌ Error en Aptos Médicos:", e); }
+        
         const rowsObs = await fetchRango(ID_SHEET_OBSERVACIONES, "'Movimientos'!A5:H2000");
         resDiagGAS.observaciones = {};
         rowsObs.forEach(row => {
@@ -251,7 +364,7 @@ async function actualizarCacheDesdeGoogle(esArranque = false) {
         let diasLegacyIso = {}; let dictDiasSQL = {}; let hojasInfo = []; 
         
         // ==========================================
-        // 🚚 EXTRACCIÓN DE KILÓMETROS Y VIAJES (SIEMPRE SE EJECUTA)
+        // 🚚 EXTRACCIÓN DE KILÓMETROS Y VIAJES
         // ==========================================
         let nuevaSeccionViajes = {};
         try {
@@ -348,7 +461,6 @@ async function actualizarCacheDesdeGoogle(esArranque = false) {
             if (cacheDatosGlobales.diagramas) {
                 cacheDatosGlobales.diagramas.observaciones = resDiagGAS.observaciones;
                 cacheDatosGlobales.diagramas.aptosMedicos = resDiagGAS.aptosMedicos;
-                // 👉 ¡AQUÍ ESTÁ LA MAGIA! AHORA ACTUALIZAMOS LOS VIAJES EN TIEMPO REAL
                 cacheDatosGlobales.diagramas.nuevaSeccionViajes = nuevaSeccionViajes; 
             }
         }
@@ -381,7 +493,6 @@ app.post('/api/proxy', async (req, res) => {
         const body = req.body; let huboCambios = false;
         const normalizar = (n) => String(n || '').trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, ' ');
 
-        // 🔐 LOGIN CON SUPABASE
         if (body && body.action === 'login') {
             try {
                 const { data: user } = await supabase.from('usuarios_auth').select('id, usuario, rol').eq('usuario', body.usuario).eq('password', body.password).single();
@@ -494,7 +605,6 @@ app.post('/api/proxy', async (req, res) => {
             let stringHojas = (body.hojas || []).join(', ');
             let nBuscado = normalizar(body.nombre);
             
-            // Creamos targetStr en formato "DD/MM/YY" estricto (Ej: "07/06/26")
             let dTarget = new Date(body.fecha + "T12:00:00");
             let targetStr = `${String(dTarget.getDate()).padStart(2,'0')}/${String(dTarget.getMonth()+1).padStart(2,'0')}/${String(dTarget.getFullYear()).slice(-2)}`;
             
@@ -508,17 +618,14 @@ app.post('/api/proxy', async (req, res) => {
                 let nFila = normalizar(rowsBC[i][1]);
                 
                 if (nFila === nBuscado) {
-                    // Limpiamos la fecha de la planilla (Quitamos " - domingo", etc.)
                     let partesFecha = fFilaRaw.split(' ')[0].split(/[\/\-]/);
                     let coincide = false;
                     
                     if (partesFecha.length >= 3) {
-                        // Forzamos a que siempre tenga ceros a la izquierda (7 -> 07)
                         let diaFila = String(parseInt(partesFecha[0], 10)).padStart(2, '0');
                         let mesFila = String(parseInt(partesFecha[1], 10)).padStart(2, '0');
                         let anioFila = partesFecha[2].length === 4 ? partesFecha[2].slice(-2) : partesFecha[2];
                         
-                        // Respaldo por si pegan la fecha al revés (YYYY-MM-DD)
                         if (partesFecha[0].length === 4) {
                             diaFila = String(parseInt(partesFecha[2], 10)).padStart(2, '0');
                             mesFila = String(parseInt(partesFecha[1], 10)).padStart(2, '0');
@@ -526,11 +633,8 @@ app.post('/api/proxy', async (req, res) => {
                         }
                         
                         let filaNormalizada = `${diaFila}/${mesFila}/${anioFila}`;
-                        
-                        // Ahora comparamos "07/06/26" === "07/06/26"
                         if (filaNormalizada === targetStr) coincide = true;
                     } else {
-                        // Respaldo de emergencia
                         if (fFilaRaw.includes(targetStr) || fFilaRaw.startsWith(body.fecha)) coincide = true;
                     }
 
@@ -565,10 +669,7 @@ app.post('/api/subir-foto', async (req, res) => {
         const { dni, imagenBase64 } = req.body;
         if (!dni || !imagenBase64) return res.status(400).json({ success: false, error: "Faltan datos (DNI o Imagen)" });
 
-        // 1. SUBIR LA FOTO A LA API DE IMGUR
-        const IMGUR_CLIENT_ID = process.env.IMGUR_CLIENT_ID || 'Tu_Client_ID_Aqui'; // Reemplázalo o ponlo en las variables de entorno de Render
-        
-        // Limpiamos el prefijo 'data:image/jpeg;base64,' que envía el HTML
+        const IMGUR_CLIENT_ID = process.env.IMGUR_CLIENT_ID || 'Tu_Client_ID_Aqui';
         const base64Data = imagenBase64.replace(/^data:image\/\w+;base64,/, "");
         
         const imgurResponse = await fetch('https://api.imgur.com/3/image', {
@@ -580,9 +681,8 @@ app.post('/api/subir-foto', async (req, res) => {
         const imgurData = await imgurResponse.json();
         if (!imgurData.success) throw new Error("La API de Imgur rechazó la imagen.");
         
-        const linkOficial = imgurData.data.link; // Ej: https://i.imgur.com/xxxxx.jpg
+        const linkOficial = imgurData.data.link;
 
-        // 2. GUARDAR EL LINK EN LA PESTAÑA 'fotos' DE GOOGLE SHEETS
         const urlPestañaFotos = `https://sheets.googleapis.com/v4/spreadsheets/${ID_SPREADSHEET_MASTER}/values/'fotos'!A:B`;
         const resFotos = await serviceAccountAuth.request({ url: urlPestañaFotos });
         const rowsFotos = resFotos.data.values || [];
@@ -590,7 +690,6 @@ app.post('/api/subir-foto', async (req, res) => {
         let rowIndex = -1;
         let dniPuro = String(dni).replace(/\D/g, '');
 
-        // Buscamos si el chofer ya tenía una foto anterior
         for (let i = 0; i < rowsFotos.length; i++) {
             if (String(rowsFotos[i][0]).replace(/\D/g, '') === dniPuro) {
                 rowIndex = i + 1; break;
@@ -598,14 +697,12 @@ app.post('/api/subir-foto', async (req, res) => {
         }
 
         if (rowIndex !== -1) {
-            // Si existe, ACTUALIZAMOS la columna B
             await serviceAccountAuth.request({
                 url: `https://sheets.googleapis.com/v4/spreadsheets/${ID_SPREADSHEET_MASTER}/values/'fotos'!B${rowIndex}?valueInputOption=USER_ENTERED`,
                 method: 'PUT',
                 data: { values: [[linkOficial]] }
             });
         } else {
-            // Si es nuevo, LO AGREGAMOS al final de la lista
             await serviceAccountAuth.request({
                 url: `https://sheets.googleapis.com/v4/spreadsheets/${ID_SPREADSHEET_MASTER}/values/'fotos'!A:B:append?valueInputOption=USER_ENTERED`,
                 method: 'POST',
@@ -613,7 +710,6 @@ app.post('/api/subir-foto', async (req, res) => {
             });
         }
 
-        // 3. ACTUALIZAR LA MEMORIA RAM Y AVISAR A LAS PANTALLAS
         if (!cacheDatosGlobales.diagramas.fotosImgur) cacheDatosGlobales.diagramas.fotosImgur = {};
         cacheDatosGlobales.diagramas.fotosImgur[dniPuro] = linkOficial;
         io.emit('datos_actualizados', cacheDatosGlobales);
