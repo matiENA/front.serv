@@ -1398,14 +1398,20 @@ function renderizarGrillaDiaria(datos, container) {
             <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden hover:shadow-md transition-shadow">
                 <div class="p-3 sm:p-4 cursor-pointer select-none" onclick="toggleDetalle('${item._safeId}')">
                     <div class="flex flex-col lg:grid lg:grid-cols-12 gap-3 items-start lg:items-center w-full">
+                        
                         <div class="lg:col-span-4 w-full min-w-0">
-                            <h3 class="font-bold text-gray-900 text-sm md:text-base leading-tight mb-1 truncate hover:text-blue-600 cursor-pointer inline-block" onclick="copiarAlPortapapeles('${item.nom.replace(/'/g, "\\'")}', event)" title="Copiar Nombre">${item.nom}</h3>
+                            <div class="flex items-center gap-1 mb-1">
+                                <h3 class="font-bold text-gray-900 text-sm md:text-base leading-tight truncate hover:text-blue-600 cursor-pointer" onclick="copiarAlPortapapeles('${item.nom.replace(/'/g, "\\'")}', event)" title="Copiar Nombre">${item.nom}</h3>
+                                ${window.obtenerBadgePrueba(item)}
+                            </div>
+                            
                             <div class="flex flex-wrap items-center gap-2 text-[10px] font-bold uppercase tracking-wider">
                                 <span class="${theme.softBg} ${theme.softText} border ${theme.border} px-1.5 py-0.5 rounded">${item.srv || '-'}</span>
                                 <span class="px-1.5 py-0.5 rounded border border-dashed border-gray-300 bg-gray-50 text-gray-500 hover:text-blue-600 transition-colors cursor-pointer" onclick="copiarAlPortapapeles('${item.n_ute}', event)" title="Copiar UTE">UTE: ${item.n_ute || '-'}</span>
                                 ${linkWspDiaria}
                             </div>
                         </div>
+                        
                         <div class="lg:col-span-3 flex items-center gap-2 w-full justify-start lg:border-none border-t border-gray-100 pt-2 lg:pt-0">
                             <div onclick="copiarAlPortapapeles('${item.tractor}', event)" title="Copiar Tractor" class="bg-gray-50 rounded-lg p-1.5 border border-gray-200 flex items-center gap-1.5 cursor-pointer hover:bg-blue-50 transition-colors group"><span class="text-[9px] font-bold text-gray-400 uppercase">Trac</span><span class="font-mono text-xs font-bold text-blue-900 w-16 truncate text-center">${item.tractor || '-'}</span></div>
                             <div onclick="copiarAlPortapapeles('${item.semi}', event)" title="Copiar Semi" class="bg-gray-50 rounded-lg p-1.5 border border-gray-200 flex items-center gap-1.5 cursor-pointer hover:bg-blue-50 transition-colors group"><span class="text-[9px] font-bold text-gray-400 uppercase">Semi</span><span class="font-mono text-xs font-bold text-blue-900 w-16 truncate text-center">${item.semi || '-'}</span></div>
@@ -1837,7 +1843,7 @@ window.mostrarDetalleConductor = function(safeId, mantenerSeleccion = false) {
             }
             
             gridHtml += `
-            <div data-fecha="${isoStr}" onclick="manejarSeleccionCalendario('${isoStr}', event, '${chofer._safeId}')" class="celda-calendario relative cursor-pointer w-full aspect-square flex flex-col items-center justify-center border rounded-lg ${bgClass} ${isToday} ${claseSeleccion} transition-all select-none overflow-hidden group">                <span class="absolute top-1 left-1.5 text-[9px] font-bold opacity-40 group-hover:opacity-70 transition-opacity pointer-events-none">${i}</span>
+            <div data-fecha="${isoStr}" onclick="manejarSeleccionCalendario('${isoStr}', event, '${chofer._safeId}')" class="celda-calendario relative cursor-pointer w-full aspect-square flex flex-col items-center justify-center border rounded-lg ${bgClass} ${isToday} ${claseSeleccion} transition-all select-none overflow-hidden group">               <span class="absolute top-1 left-1.5 text-[9px] font-bold opacity-40 group-hover:opacity-70 transition-opacity pointer-events-none">${i}</span>
                 <span class="text-xs sm:text-sm font-black pointer-events-none drop-shadow-sm z-10 w-full text-center truncate px-0.5">${textVal}</span>
                 <div class="absolute bottom-1 w-full flex justify-center items-center gap-0.5 pointer-events-none px-1">${dotHtml}${obsHtml}${docVenHtml}</div>
             </div>`;
@@ -1939,7 +1945,11 @@ window.mostrarDetalleConductor = function(safeId, mantenerSeleccion = false) {
                         </span>
                     </div>
                 </div>
+                
                 <div class="flex flex-wrap items-stretch gap-3 w-full xl:w-auto justify-start xl:justify-end">
+                    
+                    ${window.obtenerProgressBarPrueba ? window.obtenerProgressBarPrueba(chofer) : ''}
+
                     <div class="flex items-center gap-3 bg-gray-50 p-2.5 rounded-xl border border-gray-100 shrink-0 justify-center min-w-[150px]">
                         <div class="text-center shrink-0 px-2"><span class="block text-2xl font-black text-gray-800 leading-none">${estadoDiaRaw || '-'}</span><span class="text-[9px] uppercase font-bold text-gray-400 tracking-wider">Día ${fBaseObj.getDate()}</span></div>
                         ${separadorTopRight}
@@ -2042,6 +2052,7 @@ window.mostrarDetalleConductor = function(safeId, mantenerSeleccion = false) {
                         </div>
                     </div>
                 </div>
+
             </div>
         </div>
     </div>
@@ -2077,11 +2088,11 @@ window.mostrarDetalleConductor = function(safeId, mantenerSeleccion = false) {
             let start = d1 <= d2 ? seleccionInicioIso : currentEndIso; 
             let end = d1 <= d2 ? currentEndIso : seleccionInicioIso; 
             
-            // 🗑️ ELIMINAMOS pintarCeldas(start, end) porque el HTML ya nace pintado desde la raíz
             mostrarPanelAcciones(conductorSeleccionadoId, start, end); 
-        }, 10); // Reducimos el delay porque ya no requiere renderizado del DOM pesado
+        }, 10); 
     }
 };
+
 // ====================================================================
 // --- SELECCIÓN Y PINTADO DE RANGOS EN EL CALENDARIO ---
 // ====================================================================
@@ -3632,6 +3643,69 @@ window.procesarNuevaFoto = function(inputElement, dniChofer, safeId) {
             console.warn("Error procesando sockets:", e);
         }
     });
+
+// ==========================================
+// 🌱 DETECTOR DE PERÍODO DE PRUEBA (6 MESES)
+// ==========================================
+window.calcularMesesPrueba = function(chofer) {
+    if (!window.cacheDatosGlobales || !window.cacheDatosGlobales.diagramas || !window.cacheDatosGlobales.diagramas.telefonos) return 999;
+    
+    let nomNorm = String(chofer.nom || '').trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, ' ');
+    let dni = (window.cacheDatosGlobales.diagramas.dnis && window.cacheDatosGlobales.diagramas.dnis[nomNorm]) 
+        ? window.cacheDatosGlobales.diagramas.dnis[nomNorm].dni : null;
+    
+    let datosContacto = (dni && window.cacheDatosGlobales.diagramas.telefonos[dni]) 
+        ? window.cacheDatosGlobales.diagramas.telefonos[dni] 
+        : window.cacheDatosGlobales.diagramas.telefonos[nomNorm];
+        
+    if (!datosContacto || !datosContacto.fechaAlta) return 999; 
+    
+    // Convertir fecha (Soporta formatos "3 Dec 2024" y "03/12/2024")
+    let d = new Date(datosContacto.fechaAlta);
+    if (isNaN(d.getTime())) {
+        let p = datosContacto.fechaAlta.split('/');
+        if (p.length === 3) d = new Date(p[2], p[1]-1, p[0]);
+    }
+    if (isNaN(d.getTime())) return 999; 
+    
+    let evaluarDesde = window.fechaGlobalContexto ? new Date(window.fechaGlobalContexto + "T12:00:00") : new Date();
+    let mesesDiff = (evaluarDesde.getFullYear() - d.getFullYear()) * 12 + (evaluarDesde.getMonth() - d.getMonth());
+    if (evaluarDesde.getDate() < d.getDate()) mesesDiff--; 
+    
+    return mesesDiff;
+};
+
+// 👉 BADGE SUTIL (Solo para Vista Diaria)
+window.obtenerBadgePrueba = function(chofer) {
+    let meses = window.calcularMesesPrueba(chofer);
+    if (meses >= 0 && meses < 6) {
+        return `<span title="Período de prueba (${meses}/6 meses)" class="inline-flex items-center bg-slate-100 text-slate-500 border border-slate-200 px-1.5 py-[1px] rounded text-[9px] font-bold uppercase tracking-wider shadow-sm ml-2 align-middle transform -translate-y-px transition-all">PRUEBA</span>`;
+    }
+    return '';
+};
+
+// 👉 PROGRESS BAR (6 Slots - Para Vista Individual)
+window.obtenerProgressBarPrueba = function(chofer) {
+    let meses = window.calcularMesesPrueba(chofer);
+    if (meses < 0 || meses >= 6 || meses === 999) return ''; 
+    
+    let html = `
+    <div title="Período de prueba: ${meses} meses completados" class="flex flex-col items-center justify-center bg-white px-3 py-1 rounded-xl border border-slate-200 shrink-0 shadow-sm h-[40px] xl:h-[42px]">
+        <span class="text-[8px] font-bold text-slate-400 uppercase tracking-widest mb-1 leading-none">Período de Prueba</span>
+        <div class="flex gap-1">`;
+    
+    // Llenado de slots (Pastillas grises oscuras = llenas, grises claras = vacías)
+    for(let i=0; i<6; i++) {
+        if (i < meses) {
+            html += `<div class="w-3 h-1.5 rounded-full bg-slate-400 shadow-inner"></div>`;
+        } else {
+            html += `<div class="w-3 h-1.5 rounded-full bg-slate-100 border border-slate-200"></div>`;
+        }
+    }
+    
+    html += `</div></div>`;
+    return html;
+};
   </script>
   <script src="modulo_inducciones.js"></script>
 </body>
