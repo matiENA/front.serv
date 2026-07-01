@@ -159,6 +159,11 @@
                     Inducciones
                 </button>
                 
+                <button onclick="cambiarVistaPrincipal('unidades')" class="w-full text-left px-3 py-2 rounded-lg text-sm font-bold text-gray-700 hover:bg-blue-50 hover:text-blue-700 transition-colors flex items-center gap-2">
+                    <svg class="w-4 h-4 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17a2 2 0 11-4 0 2 2 0 014 0zM19 17a2 2 0 11-4 0 2 2 0 014 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16V6a1 1 0 00-1-1H4a1 1 0 00-1 1v10a1 1 0 001 1h1m8-1a1 1 0 01-1 1H9m4-1V8a1 1 0 011-1h2.586a1 1 0 01.707.293l3.414 3.414a1 1 0 01.293.707V16a1 1 0 01-1 1h-1m-6-1a1 1 0 001 1h1M5 17a2 2 0 104 0m-4 0a2 2 0 114 0m6 0a2 2 0 104 0m-4 0a2 2 0 114 0"></path></svg>
+                    Control de Flota
+                </button>
+                
                 </div>
         </div>
     </div>
@@ -185,14 +190,13 @@
           </div>
       </div>
 
-      <div class="flex items-center bg-gray-200 p-1 rounded-lg border border-gray-300 shadow-inner overflow-x-auto w-full xl:w-auto xl:absolute xl:left-1/2 xl:-translate-x-1/2 z-10 custom-scrollbar">
+<div class="flex items-center bg-gray-200 p-1 rounded-lg border border-gray-300 shadow-inner overflow-x-auto w-full xl:w-auto xl:absolute xl:left-1/2 xl:-translate-x-1/2 z-10 custom-scrollbar">
         <button id="btn-vista-diaria" onclick="cambiarVistaPrincipal('diaria')" class="px-3 sm:px-5 py-1.5 sm:py-2 text-[11px] sm:text-sm font-bold rounded-md bg-white shadow text-primary transition-all whitespace-nowrap">Diaria (Lista)</button>
         <button id="btn-vista-semanal" onclick="cambiarVistaPrincipal('semanal')" class="px-3 sm:px-5 py-1.5 sm:py-2 text-[11px] sm:text-sm font-bold rounded-md text-gray-500 hover:text-gray-700 transition-all whitespace-nowrap">Diagrama</button>
         <button id="btn-vista-individual" onclick="cambiarVistaPrincipal('individual')" class="px-3 sm:px-5 py-1.5 sm:py-2 text-[11px] sm:text-sm font-bold rounded-md text-gray-500 hover:text-gray-700 transition-all whitespace-nowrap">Individual</button>
         <button id="btn-vista-metricas" onclick="cambiarVistaPrincipal('metricas')" class="px-3 sm:px-5 py-1.5 sm:py-2 text-[11px] sm:text-sm font-bold rounded-md text-gray-500 hover:text-gray-700 transition-all whitespace-nowrap">Métricas</button>
-        <button id="btn-vista-unidades" onclick="cambiarVistaPrincipal('unidades')" class="px-3 sm:px-5 py-1.5 sm:py-2 text-[11px] sm:text-sm font-bold rounded-md text-gray-500 hover:text-gray-700 transition-all whitespace-nowrap">Flota</button>
-    </div>
-      
+      </div>
+
       <div class="hidden xl:block w-[350px]"></div>
 
     </div>
@@ -505,11 +509,7 @@ function cambiarVistaPrincipal(vista) {
         document.getElementById('btn-vista-diaria').className = vista === 'diaria' ? btnClasses.active : btnClasses.inactive;
         document.getElementById('btn-vista-semanal').className = vista === 'semanal' ? btnClasses.active : btnClasses.inactive;
         document.getElementById('btn-vista-individual').className = vista === 'individual' ? btnClasses.active : btnClasses.inactive;
-        document.getElementById('btn-vista-metricas').className = vista === 'metricas' ? btnClasses.active : btnClasses.inactive;
-        if (document.getElementById('btn-vista-unidades')) {
-            document.getElementById('btn-vista-unidades').className = vista === 'unidades' ? btnClasses.active : btnClasses.inactive;
-        }
-        
+        document.getElementById('btn-vista-metricas').className = vista === 'metricas' ? btnClasses.active : btnClasses.inactive;        
         document.getElementById('container-busqueda').style.display = (vista === 'individual' || vista === 'metricas' || vista === 'unidades') ? 'none' : 'block';
         filtrarTabla();
     }
@@ -1052,12 +1052,21 @@ const dashboard = document.getElementById('dashboard');
             }
             renderizarVistaMetricas(document.getElementById('contenedor-metricas'));
             
-        // 👉 NUEVO ENRUTADOR PARA LA PESTAÑA UNIDADES
+        // 👉 ENRUTADOR PARA LA PESTAÑA UNIDADES
         } else if (vistaActual === 'unidades') {
             if (!document.getElementById('contenedor-unidades')) {
                 dashboard.innerHTML = '<div id="contenedor-unidades" class="w-full"></div>';
             }
             window.renderizarVistaUnidades(document.getElementById('contenedor-unidades'));
+
+        // 👉 NUEVO ENRUTADOR PARA LA PESTAÑA INDUCCIONES
+        } else if (vistaActual === 'inducciones') {
+            if (!document.getElementById('contenedor-inducciones')) {
+                dashboard.innerHTML = '<div id="contenedor-inducciones" class="w-full"></div>';
+            }
+            if(window.renderizarVistaInducciones) {
+                window.renderizarVistaInducciones(document.getElementById('contenedor-inducciones'));
+            }
 
         } else {            
             if (!document.getElementById('contenedor-lista-principal')) {
@@ -1072,8 +1081,7 @@ const dashboard = document.getElementById('dashboard');
             if (vistaActual === 'diaria') renderizarGrillaDiaria(filtrados, contLista);
             else if (vistaActual === 'semanal') renderizarGrillaSemanal(filtrados, contLista);
             renderizarPanelFiltros();
-        }
-    }
+        }    }
 
     window.toggleFiltroRetornan = function() {
         filtrosActivos.retornan = !filtrosActivos.retornan;
