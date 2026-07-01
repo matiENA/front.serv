@@ -144,6 +144,25 @@
           <span class="hidden sm:block uppercase tracking-wider">Cerrar Sesión</span>
         </button>
     </div>
+
+    <div class="relative group">
+        <button class="flex items-center justify-center w-10 h-10 bg-white border border-gray-200 text-gray-600 hover:text-indigo-600 hover:bg-indigo-50 rounded-xl transition-all shadow-sm focus:outline-none">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path></svg>
+        </button>
+        
+        <div class="absolute right-0 mt-2 w-48 bg-white border border-gray-100 rounded-xl shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50 transform origin-top-right group-hover:scale-100 scale-95">
+            <div class="p-2 flex flex-col gap-1">
+                <span class="px-3 py-1.5 text-[9px] font-black text-gray-400 uppercase tracking-widest border-b border-gray-100 mb-1">Módulos Especiales</span>
+                
+                <button onclick="cambiarVistaPrincipal('inducciones')" class="w-full text-left px-3 py-2 rounded-lg text-sm font-bold text-gray-700 hover:bg-teal-50 hover:text-teal-700 transition-colors flex items-center gap-2">
+                    <svg class="w-4 h-4 text-teal-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"></path></svg>
+                    Inducciones
+                </button>
+                
+                </div>
+        </div>
+    </div>
+
   </header>
 
   <nav class="max-w-7xl mx-auto w-full px-4 sm:px-6 mb-4 mt-2">
@@ -1836,14 +1855,17 @@ window.mostrarDetalleConductor = function(safeId, mantenerSeleccion = false) {
         }
     }
 
-    const theme = getSrvTheme(chofer.srv);
+   const theme = getSrvTheme(chofer.srv);
     let urlFoto = fotosGlobales[dniDelChofer];
-    let imgSource = urlFoto ? urlFoto : `https://ui-avatars.com/api/?name=${encodeURIComponent(chofer.nom)}&background=e0e7ff&color=19407E&bold=true&size=256`;
     
-    // 👉 NUEVO: Avatar interactivo con botón de carga
+    // 1. Definimos la imagen o el salvavidas (por si falla la carga)
+    let imgSource = urlFoto ? urlFoto : `https://ui-avatars.com/api/?name=${encodeURIComponent(chofer.nom)}&background=e0e7ff&color=19407E&bold=true&size=256`;
+    let errorFallback = `this.onerror=null; this.src='https://ui-avatars.com/api/?name=${encodeURIComponent(chofer.nom)}&background=e0e7ff&color=19407E&bold=true&size=256';`;
+    
+    // 2. Avatar Interactivo Único (Con prevención de burbujeo en el input)
     let avatarHtml = `
     <div class="relative group cursor-pointer w-full h-48 md:h-auto aspect-[3/4] rounded-xl overflow-hidden shadow-sm border border-gray-200 shrink-0 bg-white" onclick="document.getElementById('input-foto-${chofer._safeId}').click()">
-        <img id="img-avatar-${chofer._safeId}" src="${imgSource}" referrerpolicy="no-referrer" class="w-full h-full object-cover group-hover:opacity-40 transition-opacity duration-300" alt="Foto de ${chofer.nom}">
+        <img id="img-avatar-${chofer._safeId}" src="${imgSource}" onerror="${errorFallback}" referrerpolicy="no-referrer" class="w-full h-full object-cover group-hover:opacity-40 transition-opacity duration-300" alt="Foto de ${chofer.nom}">
         
         <div class="absolute inset-0 flex flex-col items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-300">
             <span class="bg-black/70 text-white text-[10px] font-bold px-3 py-1.5 rounded-lg flex items-center gap-2 shadow-lg backdrop-blur-sm uppercase tracking-widest">
@@ -1852,19 +1874,12 @@ window.mostrarDetalleConductor = function(safeId, mantenerSeleccion = false) {
             </span>
         </div>
         
-        <input type="file" id="input-foto-${chofer._safeId}" class="hidden" accept="image/jpeg, image/png, image/webp" onchange="procesarNuevaFoto(this, '${dniDelChofer}', '${chofer._safeId}')">
+        <input type="file" id="input-foto-${chofer._safeId}" class="hidden" accept="image/jpeg, image/png, image/webp" onclick="event.stopPropagation()" onchange="procesarNuevaFoto(this, '${dniDelChofer}', '${chofer._safeId}')">
         
-        <div id="loader-foto-${chofer._safeId}" class="hidden absolute inset-0 bg-white/80 backdrop-blur-sm flex items-center justify-center z-10">
+        <div id="loader-foto-${chofer._safeId}" style="display: none;" class="absolute inset-0 bg-white/80 backdrop-blur-sm items-center justify-center z-10">
             <span class="animate-spin w-8 h-8 border-4 border-indigo-600 border-t-transparent rounded-full"></span>
         </div>
     </div>`;
-
-    let commonImgClasses = "w-full h-48 md:h-auto aspect-[3/4] object-cover rounded-xl shadow-sm border border-gray-200 shrink-0 bg-white";    
-    if (urlFoto) {
-        avatarHtml = `<img src="${urlFoto}" referrerpolicy="no-referrer" onerror="this.src='https://ui-avatars.com/api/?name=${encodeURIComponent(chofer.nom)}&background=e0e7ff&color=19407E&bold=true&size=256'" class="${commonImgClasses}" alt="Foto de ${chofer.nom}">`;
-    } else {
-        avatarHtml = `<img src="https://ui-avatars.com/api/?name=${encodeURIComponent(chofer.nom)}&background=e0e7ff&color=19407E&bold=true&size=256" class="${commonImgClasses}" alt="Avatar de ${chofer.nom}">`;
-    }
 
     // ==========================================
     // 🚨 ANÁLISIS DE ALERTAS DE UNIDAD (NUEVO)
@@ -3478,35 +3493,29 @@ window.procesarNuevaFoto = function(inputElement, dniChofer, safeId) {
     const file = inputElement.files[0];
     if (!file) return;
 
-    // Validar tamaño (máximo 5MB)
     if (file.size > 5 * 1024 * 1024) {
         showToast("La imagen es demasiado pesada. Máximo 5MB.", "error");
-        inputElement.value = ''; // Resetear input
+        inputElement.value = '';
         return;
     }
 
-    // Mostrar loader en el avatar
+    // 👉 Encendido forzado del cargador
     const loader = document.getElementById(`loader-foto-${safeId}`);
-    if (loader) loader.classList.remove('hidden');
+    if (loader) loader.style.display = 'flex';
 
     const reader = new FileReader();
     reader.onload = function(event) {
         const base64Data = event.target.result;
 
-        // Enviar a nuestra API en Node.js
         fetch(API_URL.replace('/proxy', '/subir-foto'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                dni: dniChofer,
-                imagenBase64: base64Data
-            })
+            body: JSON.stringify({ dni: dniChofer, imagenBase64: base64Data })
         })
         .then(res => res.json())
         .then(data => {
             if (data.success) {
                 showToast("Foto actualizada correctamente.", "success");
-                // Actualizar la imagen visualmente sin recargar la página
                 const imgElement = document.getElementById(`img-avatar-${safeId}`);
                 if (imgElement) imgElement.src = data.link;
             } else {
@@ -3518,14 +3527,14 @@ window.procesarNuevaFoto = function(inputElement, dniChofer, safeId) {
             showToast("Error de conexión al subir la foto.", "error");
         })
         .finally(() => {
-            if (loader) loader.classList.add('hidden');
-            inputElement.value = ''; // Limpiar el input para permitir subir la misma foto de nuevo si hay error
+            // 👉 Apagado del cargador
+            if (loader) loader.style.display = 'none';
+            inputElement.value = ''; 
         });
     };
 
     reader.readAsDataURL(file);
 };
-
   </script>
 
 <script src="https://unpkg.com/morphdom@2.7.1/dist/morphdom-umd.min.js"></script>
@@ -3616,5 +3625,6 @@ window.procesarNuevaFoto = function(inputElement, dniChofer, safeId) {
         }
     });
   </script>
+  <script src="modulo_inducciones.js"></script>
 </body>
 </html>
