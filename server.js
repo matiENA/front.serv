@@ -9,24 +9,17 @@ const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
 app.use(compression()); 
-
 const server = http.createServer(app); 
 
-// 👉 CONFIGURACIÓN ACTUALIZADA DE SOCKET.IO PARA EVITAR ERROR CORS Y 502
 const io = new Server(server, { 
     cors: { 
         origin: ["https://diagramas-hp1p.onrender.com", "http://localhost:3000", "*"], 
-        methods: ["GET", "POST"],
-        credentials: true
+        methods: ["GET", "POST"], credentials: true
     },
     transports: ['websocket', 'polling']
 });
 
-app.use(cors({
-    origin: '*',
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'Accept']
-}));
+app.use(cors({ origin: '*', methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], allowedHeaders: ['Content-Type', 'Authorization', 'Accept'] }));
 app.options('*', cors());
 app.use(express.json({ limit: '10mb', type: ['application/json', 'text/plain'] }));
 
@@ -35,7 +28,7 @@ app.use(express.json({ limit: '10mb', type: ['application/json', 'text/plain'] }
 // ==========================================
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_KEY;
-const supabase = createClient(supabaseUrl, supabaseKey); // 🔐 Supabase activo solo para LOGIN
+const supabase = createClient(supabaseUrl, supabaseKey);
 
 const serviceAccountAuth = new JWT({
     email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
@@ -47,15 +40,17 @@ const ID_SPREADSHEET_MASTER = process.env.SPREADSHEET_ID || '1eQ9Y5diL5fwxYTxvse
 const ID_SPREADSHEET_DIAGRAMAS = '1mhfXpFCF6upMlnRnZjDdBVS_wqTx5q8v0qQArNCnNAU';
 const ID_SHEET_OBSERVACIONES = '1VwCNK89ecaac7IDlMWWCLHRqZoch9HB6vop5AfQEaA0';
 const ID_SHEET_APTOS_MEDICOS = '1oJmN8hurfHfNnGBYUFcBdlrIj2VUzeIyq0ZTWxTpYNI';
-const ID_SHEET_MOVIMIENTOS = '1ArSUOVJU0cNXk4lvc2CncBEC3e_fBXd7ICMvC_6HexQ'; 
 const ID_SHEET_KILOMETROS = '1Wr-_P4mDvldif_cAx08sp7yT8uTUrajI2HQAJF6tnGM';
-const ID_SHEET_LEGAJOS_MAESTRO = '19_UPtQYtu7l9zeZPK_glqonxD5jnxXyD8msyy_1lydg'; // 🪪 NUEVA PLANILLA LEGAJOS
+
+// 👉 ESTANDARIZACIÓN: Leemos el ID del mes en curso desde Render (Si no hay, usa el backup)
+const ID_SHEET_MOVIMIENTOS = process.env.MES_MOVIMIENTOS_ID || '1hhJKwp9xOOHL_zZSJMbrJh5fwfsIPre155UTWhKWI44'; 
+
 const mesesAbrev = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
 
 let cacheDatosGlobales = { diagramas: null, tds: null, nombresMesActual: [], ultimaActualizacion: null };
 
 // ==========================================
-// 🛡️ LECTOR ULTRALIVIANO CON ANTI-BLOQUEO (API V4)
+// 🛡️ LECTOR ULTRALIVIANO CON ANTI-BLOQUEO
 // ==========================================
 async function fetchRango(spreadsheetId, rango, reintentos = 3) {
     for (let i = 0; i < reintentos; i++) {
@@ -65,20 +60,25 @@ async function fetchRango(spreadsheetId, rango, reintentos = 3) {
             return res.data.values || [];
         } catch (e) {
             if (e.response && e.response.status === 429) {
-                console.warn(`⏳ Límite de Google en ${rango}. Reintentando en ${(i + 1) * 1.5}s...`);
+                console.warn(`⏳ Límite en ${rango}. Reintentando en ${(i + 1) * 1.5}s...`);
                 await new Promise(resolve => setTimeout(resolve, (i + 1) * 1500));
-            } else {
-                return [];
-            }
+            } else { return []; }
         }
     }
     return []; 
 }
 
-let ejecutandoGlobal = false;
-let pendienteGlobal = false;
-let necesitaArranqueProfundo = true; 
+// 👉 NUEVO RADAR: Escanea y encuentra pestañas sin importar cómo las escriban
+async function getTabName(spreadsheetId, keyword, defaultName) {
+    try {
+        const resMeta = await serviceAccountAuth.request({ url: `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}` });
+        const sheets = resMeta.data.sheets || [];
+        const found = sheets.find(s => s.properties.title.toLowerCase().includes(keyword.toLowerCase()));
+        return found ? found.properties.title : defaultName;
+    } catch(e) { return defaultName; }
+}
 
+let ejecutandoGlobal = false, pendienteGlobal = false, necesitaArranqueProfundo = true; 
 async function flujoEncoladoGlobal(esArranque = false) {
     if (esArranque) necesitaArranqueProfundo = true;
     if (ejecutandoGlobal) { pendienteGlobal = true; return; }
@@ -92,7 +92,6 @@ async function flujoEncoladoGlobal(esArranque = false) {
         if (pendienteGlobal) { pendienteGlobal = false; flujoEncoladoGlobal(necesitaArranqueProfundo); }
     }
 }
-
 setTimeout(() => { flujoEncoladoGlobal(true); }, 3000); 
 
 // ==========================================
@@ -100,7 +99,7 @@ setTimeout(() => { flujoEncoladoGlobal(true); }, 3000);
 // ==========================================
 async function actualizarCacheDesdeGoogle(esArranque = false) {
     try {
-        console.log(esArranque ? "🚀 ARRANQUE: Descarga Cruda (RAM Protegida)..." : "⚡ WEBHOOK/SAVE: Actualizando RAM en tiempo real...");
+        console.log(esArranque ? "🚀 ARRANQUE: Descarga Cruda (RAM Protegida)..." : "⚡ WEBHOOK: Actualizando RAM en tiempo real...");
         const normalizar = (n) => String(n || '').trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, ' ');
 
         let resDiagGAS = {
@@ -113,20 +112,15 @@ async function actualizarCacheDesdeGoogle(esArranque = false) {
 
         let listaChoferesMaestros = [];
         
-// ==========================================
-        // 🚚 1. CONSTRUCCIÓN DE LA FLOTA EN RAM (Reemplazo del JSON H1)
-        // ==========================================
+        // 🚚 1. CONSTRUCCIÓN DE LA FLOTA EN RAM
         try {
             let hoy = new Date();
             let anio = hoy.getFullYear();
-            let mesStr = String(hoy.getMonth() + 1).padStart(2, '0');
             let nombreHojaActual = mesesAbrev[hoy.getMonth()] + "-" + String(anio).slice(-2);
 
-            // A) Leer el diagrama actual para obtener todos los choferes y sus SERVICIOS (Columna C)
             const rowsDiagActual = await fetchRango(ID_SPREADSHEET_DIAGRAMAS, `'${nombreHojaActual}'!A6:C255`);
             rowsDiagActual.forEach(row => {
-                let cellNombre = row[1]; 
-                let cellServicio = row[2]; 
+                let cellNombre = row[1]; let cellServicio = row[2]; 
                 if (cellNombre && cellNombre !== "APELLIDO Y NOMBRE" && cellNombre !== "Personal Activo") {
                     let norm = normalizar(cellNombre);
                     if (!resDiagGAS.flota[norm]) {
@@ -136,247 +130,119 @@ async function actualizarCacheDesdeGoogle(esArranque = false) {
                 }
             });
 
-            // B) Buscar la pestaña real (ya que le cambian el nombre al mes, ej: "JUNIO 2026- Mov...")
-            let nombrePestañaMov = "Mov.Unidades y Choferes";
-            try {
-                const resMeta = await serviceAccountAuth.request({ url: `https://sheets.googleapis.com/v4/spreadsheets/${ID_SHEET_MOVIMIENTOS}` });
-                let sheets = resMeta.data.sheets || [];
-                for (let s of sheets) {
-                    if (s.properties.title.includes("Mov.Unidades y Choferes")) {
-                        nombrePestañaMov = s.properties.title;
-                        break;
-                    }
-                }
-            } catch(e) { console.warn("No se pudo obtener meta-data de Movimientos, usando nombre por defecto."); }
-
-            // C) Leer la pestaña y hacer el cruce de Unidades
+            // Buscador Inteligente
+            let nombrePestañaMov = await getTabName(ID_SHEET_MOVIMIENTOS, "Mov.Unidades", "Mov.Unidades y Choferes");
             const rowsMov = await fetchRango(ID_SHEET_MOVIMIENTOS, `'${nombrePestañaMov}'!A1:ZZ300`);
+            
             if (rowsMov.length > 0) {
-                let headers = rowsMov[0];
-                let targetD = hoy.getDate(); 
-                let targetM = hoy.getMonth(); 
-                let targetY = hoy.getFullYear();
+                let headers = rowsMov[0]; let targetD = hoy.getDate(), targetM = hoy.getMonth(), targetY = hoy.getFullYear();
                 const mesesLargo = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
-                
                 let regexFechaTexto = new RegExp(`\\b0?${targetD}[\\s/]+${mesesLargo[targetM]}[\\s/]+${targetY}\\b`, 'i');
-                let colFecha = -1;
-                let colNombreActivos = -1;
+                let colFecha = -1, colNombreActivos = -1;
 
-                // 1. Intentar encontrar la columna de HOY
                 for (let c = 0; c < headers.length; c++) {
                     let strVal = String(headers[c] || "").toLowerCase().trim();
-                    if (regexFechaTexto.test(strVal) || 
-                        strVal === `${String(targetD).padStart(2,'0')}/${String(targetM+1).padStart(2,'0')}/${targetY}` || 
-                        strVal === `${targetD}/${targetM+1}/${targetY}`) { 
-                        colFecha = c; 
-                        break; 
-                    }
+                    if (regexFechaTexto.test(strVal) || strVal.includes(`${targetD}/${targetM+1}/${targetY}`)) { colFecha = c; break; }
                 }
 
-                if (colFecha !== -1 && colFecha >= 3) {
-                    colNombreActivos = colFecha - 3;
-                } else {
-                    // 2. BACKUP VITAL: Si no crearon la columna de hoy, usamos la ÚLTIMA lista de asignaciones creada
-                    console.warn(`⚠️ Columna del ${targetD} de ${mesesLargo[targetM]} no encontrada. Buscando la última asignación disponible...`);
+                if (colFecha !== -1 && colFecha >= 3) { colNombreActivos = colFecha - 3; } 
+                else {
                     for (let c = headers.length - 1; c >= 3; c--) {
-                        let strVal = String(headers[c] || "").toLowerCase().trim();
-                        if (strVal === "chofer") {
-                            colNombreActivos = c;
-                            break;
-                        }
+                        if (String(headers[c] || "").toLowerCase().trim() === "chofer") { colNombreActivos = c; break; }
                     }
                 }
 
                 if (colNombreActivos !== -1) {
                     for (let i = 2; i < rowsMov.length; i++) {
-                        let nombreMovOriginal = String(rowsMov[i][colNombreActivos] || "").trim();
-                        if (!nombreMovOriginal || nombreMovOriginal === "1") continue;
-                        if (!/[a-zA-ZáéíóúÁÉÍÓÚñÑ]/.test(nombreMovOriginal)) continue;
-
-                        let norm = normalizar(nombreMovOriginal);
+                        let nombreMov = String(rowsMov[i][colNombreActivos] || "").trim();
+                        if (!nombreMov || nombreMov === "1" || !/[a-zA-Záéíóú]/.test(nombreMov)) continue;
+                        let norm = normalizar(nombreMov);
                         
                         if (resDiagGAS.flota[norm]) {
                             resDiagGAS.flota[norm].n_ute = String(rowsMov[i][2] || "").trim(); 
                             resDiagGAS.flota[norm].tractor = String(rowsMov[i][4] || "").trim(); 
                             resDiagGAS.flota[norm].semi = String(rowsMov[i][5] || "").trim(); 
                         } else {
-                            resDiagGAS.flota[norm] = { 
-                                tractor: String(rowsMov[i][4] || "").trim(), 
-                                semi: String(rowsMov[i][5] || "").trim(), 
-                                servicio: 'S/A', 
-                                n_ute: String(rowsMov[i][2] || "").trim(), 
-                                td: '-', hex1: '', hex2: '' 
-                            };
-                            listaChoferesMaestros.push({ nombre: nombreMovOriginal, norm: norm });
+                            resDiagGAS.flota[norm] = { tractor: String(rowsMov[i][4] || "").trim(), semi: String(rowsMov[i][5] || "").trim(), servicio: 'S/A', n_ute: String(rowsMov[i][2] || "").trim(), td: '-', hex1: '', hex2: '' };
+                            listaChoferesMaestros.push({ nombre: nombreMov, norm: norm });
                         }
                     }
-                } else {
-                    console.warn("⚠️ ERROR CRÍTICO: No se encontró la columna 'Chofer' en la planilla de Movimientos.");
                 }
             }
 
-            // D) Leer 'Tabla de viajes' para obtener TD y HEX (Colores)
-            const rowsTV = await fetchRango(ID_SHEET_MOVIMIENTOS, "'Tabla de viajes'!D2:G200");
+            let nombrePestañaViajes = await getTabName(ID_SHEET_MOVIMIENTOS, "Tabla de viajes", "Tabla de viajes");
+            const rowsTV = await fetchRango(ID_SHEET_MOVIMIENTOS, `'${nombrePestañaViajes}'!D2:G200`);
             let mapaTD = {};
             rowsTV.forEach(row => {
-                let tractor = String(row[0] || "").trim(); // Columna D
-                let td = String(row[1] || "").trim();      // Columna E
-                let hex = String(row[3] || "").trim();     // Columna G
-                if (tractor) { mapaTD[tractor] = { td: td, hex: hex }; }
+                let tractor = String(row[0] || "").trim();
+                if (tractor) mapaTD[tractor] = { td: String(row[1] || "").trim(), hex: String(row[3] || "").trim() };
             });
             
             for (let key in resDiagGAS.flota) {
                 let tr = resDiagGAS.flota[key].tractor;
-                if (tr && mapaTD[tr]) {
-                    resDiagGAS.flota[key].td = mapaTD[tr].td;
-                    resDiagGAS.flota[key].hex1 = mapaTD[tr].hex;
-                    resDiagGAS.flota[key].hex2 = mapaTD[tr].hex;
-                }
+                if (tr && mapaTD[tr]) { resDiagGAS.flota[key].td = mapaTD[tr].td; resDiagGAS.flota[key].hex1 = mapaTD[tr].hex; resDiagGAS.flota[key].hex2 = mapaTD[tr].hex; }
             }
-            console.log(`✅ Flota ensamblada en RAM: ${listaChoferesMaestros.length} choferes vinculados a sus unidades diarias.`);
-        } catch (e) { console.error("❌ Error construyendo la Flota en RAM:", e); }
+        } catch (e) { console.error("❌ Error en Flota RAM:", e); }
 
-// ==========================================
-        // 🪪 MOTOR DE RASTREO MAESTRO Y DNIS
-        // ==========================================
+        // 🪪 MOTOR DE DNIS Y CONTACTOS
         let dnisMap = {}; let telefonosMap = {};
-        
         try {
-            // 👉 1. FUENTE PRIMARIA: Pestaña 'dni' (Prioridad Absoluta)
             const rowsDni = await fetchRango(ID_SPREADSHEET_MASTER, "'dni'!A1:D500");
-            if (rowsDni && rowsDni.length > 0) {
+            if (rowsDni.length > 0) {
                 rowsDni.forEach(row => {
-                    let nomRaw = String(row[0] || "").trim();
-                    if (!nomRaw) return;
-                    let nomNorm = normalizar(nomRaw);
-                    
-                    // Columna A (índice 0) es Nombre, Columna C (índice 2) es DNI
+                    let nomRaw = String(row[0] || "").trim(); if (!nomRaw) return;
                     let dniStr = String(row[2] || "").replace(/\D/g, '');
-                    if (dniStr) {
-                        dnisMap[nomNorm] = { dni: String(parseInt(dniStr, 10)) };
-                    }
+                    if (dniStr) dnisMap[normalizar(nomRaw)] = { dni: String(parseInt(dniStr, 10)) };
                 });
-                console.log(`✅ ${Object.keys(dnisMap).length} DNIs extraídos de la fuente primaria ('dni').`);
             }
-        } catch(e) { console.error("❌ Error leyendo pestaña 'dni':", e); }
+        } catch(e) {}
 
         try {
-            // 👉 2. DATOS DE CONTACTO: Pestaña 'LEGAJOS' (Teléfonos, Emails, Fechas)
             const rowsLegajos = await fetchRango(ID_SPREADSHEET_MASTER, "'LEGAJOS'!A2:P350");
-            if (rowsLegajos && rowsLegajos.length > 0) {
+            if (rowsLegajos.length > 0) {
                 rowsLegajos.forEach(row => {
-                    if (!row || row.length < 2) return;
-                    let nomRaw = String(row[1] || "").trim();
-                    if (!nomRaw || nomRaw.toLowerCase().includes("baja") || nomRaw.toLowerCase() === "apellido - nombre") return;
-
+                    let nomRaw = String(row[1] || "").trim(); if (!nomRaw || nomRaw.toLowerCase().includes("baja")) return;
                     let nomNorm = normalizar(nomRaw);
-                    let legajoStr = String(row[0] || "").trim(); 
-                    let dniLegajoStr = String(row[2] || "").replace(/\D/g, '');
-                    let telStr = String(row[3] || "").trim(); 
-                    let emailStr = String(row[4] || "").trim(); 
-                    let fechaAltaStr = String(row[10] || "").trim();
-
-                    let datosContacto = { legajo: legajoStr, telefono: telStr, email: emailStr, fechaAlta: fechaAltaStr };
+                    let datosContacto = { legajo: String(row[0] || "").trim(), telefono: String(row[3] || "").trim(), email: String(row[4] || "").trim(), fechaAlta: String(row[10] || "").trim() };
                     telefonosMap[nomNorm] = datosContacto;
-
-                    // Si el chofer NO estaba en la pestaña 'dni', lo rescatamos de Legajos como plan B
-                    if (dniLegajoStr && !dnisMap[nomNorm]) {
-                        let dniPuro = String(parseInt(dniLegajoStr, 10)); 
-                        dnisMap[nomNorm] = { dni: dniPuro }; 
-                    }
-                    
-                    // Vinculamos su teléfono al DNI definitivo para que el cruce de fotos y aptos sea perfecto
-                    if (dnisMap[nomNorm] && dnisMap[nomNorm].dni) {
-                        telefonosMap[dnisMap[nomNorm].dni] = datosContacto;
-                    }
+                    let dniLegajo = String(row[2] || "").replace(/\D/g, '');
+                    if (dniLegajo && !dnisMap[nomNorm]) dnisMap[nomNorm] = { dni: String(parseInt(dniLegajo, 10)) };
+                    if (dnisMap[nomNorm] && dnisMap[nomNorm].dni) telefonosMap[dnisMap[nomNorm].dni] = datosContacto;
                 });
-            } else {
-                console.warn("⚠️ No se encontraron datos en la pestaña 'LEGAJOS' del Master.");
             }
-        } catch (e) { console.error("❌ Error en Motor de Rastreo de Legajos:", e); }
-
-        try {
-            // 👉 3. RESPALDO FINAL: Documentaciones externas
-            const ID_SHEET_HABILITACIONES = '1hPDno09tMBtKh7aIdsvzEYcyOY7leYj2B6XnniD0aXg'; const ID_SHEET_DOCUMENTOS = '1pnYXKDSv70Vq78Rchxus5FHMKdgXdbfltVsEg6vArjo';
-            const [resDocsTab, resHabsTab] = await Promise.all([ fetchRango(ID_SHEET_DOCUMENTOS, "'PERIODICOS'!A1:E300"), fetchRango(ID_SHEET_HABILITACIONES, "'VENCIMIENTOS'!A1:C300") ]);
-            const extraerDni = (c) => { let l = String(c).replace(/\D/g, ''); return l.length === 11 ? String(parseInt(l.substring(2, 10), 10)) : (l.length === 10 ? String(parseInt(l.substring(2, 9), 10)) : String(parseInt(l, 10))); };
-            resDocsTab.forEach(fila => { let nom = normalizar(fila[1]); let dni = extraerDni(fila[4]); if (nom && dni && !dnisMap[nom]) dnisMap[nom] = { dni: dni }; });
-            resHabsTab.forEach(fila => { let nom = normalizar(fila[1]); let dni = String(fila[2] || '').replace(/\D/g, ''); if (nom && dni && !dnisMap[nom]) dnisMap[nom] = { dni: String(parseInt(dni, 10)) }; });
         } catch (e) {}
-
         resDiagGAS.dnis = dnisMap; resDiagGAS.telefonos = telefonosMap;
-        // ==========================================
-        // 🩺 EXTRACCIÓN DE APTOS MÉDICOS (Dinámico Diario)
-        // ==========================================
+
+        // 🩺 APTOS Y OBSERVACIONES
         try {
-            // 👉 RANGO LIMITADO A 'DZ' (130 columnas) PARA NO SATURAR LA RAM DE RENDER
             const rowsAptos = await fetchRango(ID_SHEET_APTOS_MEDICOS, "'Seguimiento Avalados Mensual'!A1:DZ500");
             resDiagGAS.aptosMedicos = {};
-            
             if (rowsAptos.length > 0) {
                 const headers = rowsAptos[0]; 
-                const hoy = new Date(); 
-                const d = String(hoy.getDate()).padStart(2, '0'); 
-                const m = String(hoy.getMonth() + 1).padStart(2, '0'); 
-                const y = hoy.getFullYear();
-                const mesesLargo = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
-                
-                const formatosHoy = [`${hoy.getDate()}/${mesesLargo[hoy.getMonth()]}/${y}`.toLowerCase(), `${d}/${m}/${y}`, `${d}/${m}`, String(hoy.getDate())];
-
                 let colDiaria = -1;
-                for (let c = 12; c < headers.length; c++) { 
-                    if (formatosHoy.includes(String(headers[c] || "").trim().toLowerCase())) { colDiaria = c; break; } 
-                }
+                for (let c = headers.length - 1; c >= 12; c--) { if (String(headers[c] || "").trim() !== "") { colDiaria = c; break; } }
                 
-                if (colDiaria === -1) { 
-                    for (let c = headers.length - 1; c >= 12; c--) { 
-                        if (String(headers[c] || "").trim() !== "") { colDiaria = c; break; } 
-                    } 
-                }
-
                 for (let i = 1; i < rowsAptos.length; i++) {
-                    let fila = rowsAptos[i]; 
-                    let nombreRaw = String(fila[0] || "").trim(); 
+                    let fila = rowsAptos[i]; let nombreRaw = String(fila[0] || "").trim(); 
                     if (!nombreRaw || nombreRaw.toLowerCase() === "nombre completo") continue;
+                    let dniLimpio = String(fila[1] || "").replace(/\D/g, '');
+                    if (dniLimpio.length >= 10) dniLimpio = String(parseInt(dniLimpio.substring(2, 10), 10));
                     
-                    let cuil = String(fila[1] || "").trim(); 
-                    let dniLimpio = String(cuil).replace(/\D/g, '');
-                    if (dniLimpio.length === 11) dniLimpio = String(parseInt(dniLimpio.substring(2, 10), 10));
-                    else if (dniLimpio.length === 10) dniLimpio = String(parseInt(dniLimpio.substring(2, 9), 10));
-                    else dniLimpio = String(parseInt(dniLimpio, 10) || "");
-                    
-                    let estadoDiario = "-"; 
-                    let limiteBusqueda = colDiaria > -1 ? colDiaria : fila.length - 1;
-                    
+                    let estadoDiario = "-"; let limiteBusqueda = colDiaria > -1 ? colDiaria : fila.length - 1;
                     for (let c = limiteBusqueda; c >= 12; c--) { 
                         let val = String(fila[c] || "").trim(); 
                         if (val !== "" && val !== "-") { estadoDiario = val; break; } 
                     }
-                    
-                    let nombreNormalizado = nombreRaw.replace(/,/g, '').toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, ' ').replace(/\s+/g, ' ');
-                    let estadoGeneral = String(fila[2] || "").trim();
-
-                    let objApto = { 
-                        dni: dniLimpio, 
-                        cuil: cuil, 
-                        estadoGeneral: estadoGeneral, 
-                        estado: estadoDiario, 
-                        responsable: fila[5] || "", 
-                        observaciones: fila[10] || "", 
-                        observaciones_sector_salud: fila[11] || "" 
-                    };
-                    
-                    if (dniLimpio) resDiagGAS.aptosMedicos[dniLimpio] = objApto;
-                    if (nombreNormalizado) resDiagGAS.aptosMedicos[nombreNormalizado] = objApto;
+                    let objApto = { dni: dniLimpio, cuil: String(fila[1] || ""), estadoGeneral: String(fila[2] || ""), estado: estadoDiario, observaciones: fila[10] || "", observaciones_sector_salud: fila[11] || "" };
+                    resDiagGAS.aptosMedicos[dniLimpio] = objApto; resDiagGAS.aptosMedicos[normalizar(nombreRaw)] = objApto;
                 }
             }
-        } catch (e) { console.error("❌ Error en Aptos Médicos:", e); }
+        } catch (e) {}
         
         const rowsObs = await fetchRango(ID_SHEET_OBSERVACIONES, "'Movimientos'!A5:H2000");
         resDiagGAS.observaciones = {};
         rowsObs.forEach(row => {
-            if(!row[1]) return;
-            let norm = normalizar(row[1]);
+            if(!row[1]) return; let norm = normalizar(row[1]);
             if (!resDiagGAS.observaciones[norm]) resDiagGAS.observaciones[norm] = [];
             resDiagGAS.observaciones[norm].push({ admin: row[0] || "-", fecha: row[2] || "-", unidad: row[3] || "-", evento: row[4] || "-", obsEvento: row[5] || "", estado: row[6] || "-", obsEstado: row[7] || "" });
         });
@@ -385,56 +251,45 @@ async function actualizarCacheDesdeGoogle(esArranque = false) {
         const extraer = (idx) => { if (!rowsCache[idx]) return {}; try { return JSON.parse(rowsCache[idx].join('').replace(/^'/, "")); } catch(e) { return {}; } };
         resDiagGAS.documentos = extraer(1); resDiagGAS.habilitaciones = extraer(2); resDiagGAS.certificados = extraer(4);
 
-        let diasLegacyIso = {}; let dictDiasSQL = {}; let hojasInfo = []; 
-        
-        // ==========================================
-        // 🚚 EXTRACCIÓN DE KILÓMETROS Y VIAJES
-        // ==========================================
+        let diasLegacyIso = {}; let hojasInfo = []; 
         let nuevaSeccionViajes = {};
         try {
             const rowsKm = await fetchRango(ID_SHEET_KILOMETROS, "'KM'!A2:T");
-            const limiteDate = new Date(); limiteDate.setDate(limiteDate.getDate() - 180); 
             const parseNum = (val) => parseFloat(String(val || '').replace(/,/g, '.').replace(/[^0-9.-]/g, '')) || 0;
-
             rowsKm.forEach(row => {
-                let fechaRaw = row[1]; let nombreRaw = row[2];
-                if (!fechaRaw || !nombreRaw) return;
-                let dObj; let parts = String(fechaRaw).split(' ')[0].split(/[\/\-]/);
+                let fechaRaw = row[1]; let nombreRaw = row[2]; if (!fechaRaw || !nombreRaw) return;
+                let dObj, parts = String(fechaRaw).split(' ')[0].split(/[\/\-]/);
                 if (parts.length >= 3) { let aa = parts[2].length === 2 ? "20" + parts[2] : parts[2]; dObj = new Date(aa, parseInt(parts[1], 10) - 1, parts[0]); } else { dObj = new Date(fechaRaw); }
-                if (isNaN(dObj.getTime()) || dObj < limiteDate) return;
-
+                if (isNaN(dObj.getTime())) return;
+                
                 let choferNorm = normalizar(nombreRaw); let isoDate = dObj.toISOString().split('T')[0];
-                let kmBase = parseNum(row[16]); let kmBackup = parseNum(row[8]); let km = kmBase > 0 ? kmBase : kmBackup;
-                let liviano = parseNum(row[3]); let euro = parseNum(row[4]); let campo = parseNum(row[5]); let infiniaD = parseNum(row[7]);
-                let hojaStr = String(row[19] || "").trim();
+                let km = parseNum(row[16]) > 0 ? parseNum(row[16]) : parseNum(row[8]);
+                let campo = parseNum(row[5]); let hojaStr = String(row[19] || "").trim();
 
-                if (km > 0 || campo > 0 || liviano > 0 || euro > 0 || infiniaD > 0 || hojaStr !== "") {
+                if (km > 0 || campo > 0 || hojaStr !== "") {
                     if (!nuevaSeccionViajes[choferNorm]) nuevaSeccionViajes[choferNorm] = {};
-                    if (!nuevaSeccionViajes[choferNorm][isoDate]) nuevaSeccionViajes[choferNorm][isoDate] = { dominio: String(row[0] || '').trim(), km: 0, liviano: 0, euro: 0, campo: 0, infiniaD: 0, hoja_ruta: [] };
-                    let target = nuevaSeccionViajes[choferNorm][isoDate];
-                    target.km += km; target.liviano += liviano; target.euro += euro; target.campo += campo; target.infiniaD += infiniaD;
-                    if (hojaStr !== "") {
-                        let arrHojas = hojaStr.split(',').map(s => s.trim()).filter(Boolean);
-                        arrHojas.forEach(h => { if (!target.hoja_ruta.includes(h)) target.hoja_ruta.push(h); });
-                    }
+                    if (!nuevaSeccionViajes[choferNorm][isoDate]) nuevaSeccionViajes[choferNorm][isoDate] = { dominio: String(row[0] || '').trim(), km: 0, campo: 0, hoja_ruta: [] };
+                    let target = nuevaSeccionViajes[choferNorm][isoDate]; target.km += km; target.campo += campo;
+                    if (hojaStr !== "") hojaStr.split(',').map(s => s.trim()).filter(Boolean).forEach(h => { if (!target.hoja_ruta.includes(h)) target.hoja_ruta.push(h); });
                 }
             });
-        } catch(e) { console.error("Error Leyendo KMs:", e); }
+        } catch(e) {}
 
         if (esArranque) {
-            const rowsVenc = await fetchRango(ID_SHEET_MOVIMIENTOS, "'Vencimientos.'!A2:N300");
+            // Buscador Inteligente para Vencimientos
+            let nombrePestañaVenc = await getTabName(ID_SHEET_MOVIMIENTOS, "Vencimiento", "Vencimientos.");
+            const rowsVenc = await fetchRango(ID_SHEET_MOVIMIENTOS, `'${nombrePestañaVenc}'!A2:N300`);
             resDiagGAS.vencimientosObj = rowsVenc.map(row => {
                 if (!row[1]) return null;
-                return { col_b: row[1] || "", col_c: row[2] || "", col_g: row[6] || "", col_h: row[7] || "", col_j: row[9] || "", col_k: row[10] || "", col_l: row[11] || "", col_m: row[12] || "", col_n: row[13] || "" };
+                return { col_b: row[1] || "", col_g: row[6] || "", col_h: row[7] || "", col_j: row[9] || "", col_k: row[10] || "", col_l: row[11] || "", col_m: row[12] || "", col_n: row[13] || "" };
             }).filter(Boolean);
 
             const rowsFotos = await fetchRango(ID_SPREADSHEET_MASTER, "'fotos'!A:B");
             resDiagGAS.fotosImgur = {};
             rowsFotos.forEach(row => { 
                 if (row[0] && row[1] && String(row[1]).includes('http')) {
-                    let numStr = String(row[0]).replace(/\D/g, ''); if (!numStr) return;
-                    if (numStr.length === 11) numStr = numStr.substring(2, 10); else if (numStr.length === 10) numStr = numStr.substring(2, 9);
-                    resDiagGAS.fotosImgur[String(parseInt(numStr, 10))] = String(row[1]).trim(); 
+                    let n = String(row[0]).replace(/\D/g, ''); if (n.length >= 10) n = n.substring(2, 10);
+                    resDiagGAS.fotosImgur[String(parseInt(n, 10))] = String(row[1]).trim(); 
                 }
             });
 
@@ -446,33 +301,23 @@ async function actualizarCacheDesdeGoogle(esArranque = false) {
                 
                 const rowsDiag = await fetchRango(ID_SPREADSHEET_DIAGRAMAS, `'${nombreHoja}'!A6:AL255`);
                 rowsDiag.forEach(row => {
-                    let cellNombre = row[1];
-                    if (!cellNombre || cellNombre === "APELLIDO Y NOMBRE" || cellNombre === "Personal Activo") return;
+                    let cellNombre = row[1]; if (!cellNombre || cellNombre === "APELLIDO Y NOMBRE" || cellNombre === "Personal Activo") return;
                     let nomNorm = normalizar(cellNombre); if (!diasLegacyIso[nomNorm]) diasLegacyIso[nomNorm] = {};
                     for (let dia = 1; dia <= 31; dia++) {
-                        let estado = row[dia + 3];
-                        if (estado && estado !== '-') { let isoDate = `${anio}-${mesStr}-${String(dia).padStart(2, '0')}`; diasLegacyIso[nomNorm][isoDate] = String(estado).toUpperCase().trim(); } 
+                        let estado = row[dia + 3]; if (estado && estado !== '-') diasLegacyIso[nomNorm][`${anio}-${mesStr}-${String(dia).padStart(2, '0')}`] = String(estado).toUpperCase().trim();
                     }
                 });
             }
 
             let diagramasHibridos = []; 
             listaChoferesMaestros.forEach(choferMaster => {
-                let nomNorm = choferMaster.norm; let nombreReal = choferMaster.nombre;
-                let flota = resDiagGAS.flota[nomNorm] || {}; let mergeIso = { ...(diasLegacyIso[nomNorm] || {}), ...(dictDiasSQL[nomNorm] || {}) };
+                let nomNorm = choferMaster.norm; let flota = resDiagGAS.flota[nomNorm] || {}; let mergeIso = diasLegacyIso[nomNorm] || {};
                 let diasFront = {};
-                
                 hojasInfo.forEach(info => {
-                    let tira = [];
-                    for (let dia = 1; dia <= 31; dia++) { tira.push(mergeIso[`${info.anio}-${info.mesStr}-${String(dia).padStart(2, '0')}`] || "-"); }
+                    let tira = []; for (let dia = 1; dia <= 31; dia++) { tira.push(mergeIso[`${info.anio}-${info.mesStr}-${String(dia).padStart(2, '0')}`] || "-"); }
                     diasFront[info.nombre] = tira.join(",");
                 });
-
-                diagramasHibridos.push({
-                    _safeId: "drv_" + nomNorm.replace(/[^a-z0-9]/g, "_"), nom: nombreReal, 
-                    tractor: flota.tractor || '', semi: flota.semi || '', srv: flota.servicio || '', n_ute: flota.n_ute || '', 
-                    td: flota.td || '-', hex1: flota.hex1 || '', hex2: flota.hex2 || '', hex_1: "#ffffff", hex_2: "#ffffff", dias: diasFront, _diasIso: mergeIso     
-                });
+                diagramasHibridos.push({ _safeId: "drv_" + nomNorm.replace(/[^a-z0-9]/g, "_"), nom: choferMaster.nombre, tractor: flota.tractor || '', semi: flota.semi || '', srv: flota.servicio || '', n_ute: flota.n_ute || '', td: flota.td || '-', hex1: flota.hex1 || '', hex2: flota.hex2 || '', hex_1: "#ffffff", hex_2: "#ffffff", dias: diasFront, _diasIso: mergeIso });
             });
 
             cacheDatosGlobales.diagramas = { 
@@ -480,43 +325,46 @@ async function actualizarCacheDesdeGoogle(esArranque = false) {
                 dnis: resDiagGAS.dnis, telefonos: resDiagGAS.telefonos, observaciones: resDiagGAS.observaciones, aptosMedicos: resDiagGAS.aptosMedicos, 
                 vencimientosObj: resDiagGAS.vencimientosObj, fotosImgur: resDiagGAS.fotosImgur
             };
-
         } else {
-            if (cacheDatosGlobales.diagramas) {
-                cacheDatosGlobales.diagramas.observaciones = resDiagGAS.observaciones;
-                cacheDatosGlobales.diagramas.aptosMedicos = resDiagGAS.aptosMedicos;
-                cacheDatosGlobales.diagramas.nuevaSeccionViajes = nuevaSeccionViajes; 
-            }
+            if (cacheDatosGlobales.diagramas) { cacheDatosGlobales.diagramas.observaciones = resDiagGAS.observaciones; cacheDatosGlobales.diagramas.aptosMedicos = resDiagGAS.aptosMedicos; cacheDatosGlobales.diagramas.nuevaSeccionViajes = nuevaSeccionViajes; }
         }
 
         cacheDatosGlobales.tds = { campo:{}, infinia:{}, liviano:{}, euro:{}, estados:{}, codigosExtra:{} };
         cacheDatosGlobales.ultimaActualizacion = new Date().toISOString();
         io.emit('datos_actualizados', cacheDatosGlobales);
         console.log(`✅ RAM Ensamblada Completa.`);
-    } catch (error) { console.error("❌ Error en construcción de RAM:", error); }
+        
+    } catch (error) { 
+        console.error("❌ Error CRÍTICO en construcción de RAM:", error); 
+    } finally {
+        // 👉 SALVAVIDAS ANTI-503 (Evita que el sistema muera si el Excel de Movimientos está vacío o da error grave)
+        if (esArranque && !cacheDatosGlobales.diagramas) {
+            console.warn("⚠️ Aplicando Salvavidas: Desbloqueando servidor de emergencia tras un fallo...");
+            cacheDatosGlobales.diagramas = { 
+                diagramas: [], nuevaSeccionViajes: {}, documentos: {}, habilitaciones: {}, certificados: {},
+                dnis: {}, telefonos: {}, observaciones: {}, aptosMedicos: {}, vencimientosObj: [], fotosImgur: {}
+            };
+            necesitaArranqueProfundo = true;
+            setTimeout(() => { flujoEncoladoGlobal(true); }, 15000); // Reintento silencioso
+        }
+    }
 }
 
-let temporizadorWebhook = null;
-app.post('/api/webhook/google', async (req, res) => { 
-    res.json({ success: true }); 
-    if (temporizadorWebhook) clearTimeout(temporizadorWebhook);
-    temporizadorWebhook = setTimeout(() => { flujoEncoladoGlobal(false); }, 6000); 
-});
 app.get('/health', (req, res) => res.status(200).send('OK'));
-
-// ==========================================
-// 🌟 4. RUTAS API Y PROXY
-// ==========================================
-    app.get('/api/datos', (req, res) => {
+app.get('/api/datos', (req, res) => {
     if (!cacheDatosGlobales.diagramas) return res.status(503).json({ error: "Cargando DB..." });
     res.json({ success: true, diagramas: cacheDatosGlobales.diagramas, tds: cacheDatosGlobales.tds, timestamp: cacheDatosGlobales.ultimaActualizacion });
-        });
+});
 
+// ==========================================
+// 🛡️ API PROXY: LOGIN Y GUARDADO DE DATOS
+// ==========================================
 app.post('/api/proxy', async (req, res) => {
     try {
         const body = req.body; let huboCambios = false;
         const normalizar = (n) => String(n || '').trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, ' ');
 
+        // 1. LOGIN
         if (body && body.action === 'login') {
             try {
                 const { data: user } = await supabase.from('usuarios_auth').select('id, usuario, rol').eq('usuario', body.usuario).eq('password', body.password).single();
@@ -525,6 +373,7 @@ app.post('/api/proxy', async (req, res) => {
             } catch(e) { return res.json({ success: false, error: "Error conectando al servidor de Auth." }); }
         }
 
+        // 2. OBSERVACIONES
         if (body && (body.action === 'guardarObservacion' || body.action === 'guardarNuevaObservacion')) {
             const docObs = new GoogleSpreadsheet(ID_SHEET_OBSERVACIONES, serviceAccountAuth);
             await docObs.loadInfo(); const sheetMov = docObs.sheetsByTitle['Movimientos'];
@@ -535,6 +384,7 @@ app.post('/api/proxy', async (req, res) => {
             }
         }
 
+        // 3. DOCUMENTOS Y HABILITACIONES
         if (body && body.action === 'guardarDocumentos') {
             let nBuscado = normalizar(body.nombre);
             let dniBuscado = cacheDatosGlobales.diagramas && cacheDatosGlobales.diagramas.dnis && cacheDatosGlobales.diagramas.dnis[nBuscado] ? cacheDatosGlobales.diagramas.dnis[nBuscado].dni : "";
@@ -625,7 +475,8 @@ app.post('/api/proxy', async (req, res) => {
             huboCambios = true;
         }
 
-       if (body && body.action === 'guardarHojaRutaPlanilla') {
+        // 4. HOJA DE RUTA
+        if (body && body.action === 'guardarHojaRutaPlanilla') {
             let stringHojas = (body.hojas || []).join(', ');
             let nBuscado = normalizar(body.nombre);
             
@@ -691,68 +542,29 @@ app.post('/api/proxy', async (req, res) => {
 app.post('/api/subir-foto', async (req, res) => {
     try {
         const { dni, imagenBase64 } = req.body;
-        if (!dni || !imagenBase64) return res.status(400).json({ success: false, error: "Faltan datos (DNI o Imagen)" });
-
-        // 1. SUBIR LA FOTO A LA API DE IMGBB
-        const IMGBB_API_KEY = process.env.IMGBB_API_KEY || 'Pon_Tu_Clave_Aqui_Si_No_Usas_Variables';
-        
-        // Limpiamos el prefijo 'data:image/jpeg;base64,'
+        const IMGBB_API_KEY = process.env.IMGBB_API_KEY;
         const base64Data = imagenBase64.replace(/^data:image\/\w+;base64,/, "");
-        
-        // ImgBB requiere que los datos viajen como Form Data
-        const formData = new URLSearchParams();
-        formData.append("image", base64Data);
-        
-        const imgbbResponse = await fetch(`https://api.imgbb.com/1/upload?key=${IMGBB_API_KEY}`, {
-            method: 'POST',
-            body: formData
-        });
-        
+        const formData = new URLSearchParams(); formData.append("image", base64Data);
+        const imgbbResponse = await fetch(`https://api.imgbb.com/1/upload?key=${IMGBB_API_KEY}`, { method: 'POST', body: formData });
         const imgbbData = await imgbbResponse.json();
-        if (!imgbbData.success) throw new Error("La API de ImgBB rechazó la imagen.");
-        
-        const linkOficial = imgbbData.data.url; // Ej: https://i.ibb.co/xxxxx/foto.jpg
+        const linkOficial = imgbbData.data.url; 
 
-        // 2. GUARDAR EL LINK EN LA PESTAÑA 'fotos' DE GOOGLE SHEETS
         const urlPestañaFotos = `https://sheets.googleapis.com/v4/spreadsheets/${ID_SPREADSHEET_MASTER}/values/'fotos'!A:B`;
         const resFotos = await serviceAccountAuth.request({ url: urlPestañaFotos });
         const rowsFotos = resFotos.data.values || [];
-        
-        let rowIndex = -1;
-        let dniPuro = String(dni).replace(/\D/g, '');
+        let rowIndex = -1; let dniPuro = String(dni).replace(/\D/g, '');
+        for (let i = 0; i < rowsFotos.length; i++) { if (String(rowsFotos[i][0]).replace(/\D/g, '') === dniPuro) { rowIndex = i + 1; break; } }
 
-        for (let i = 0; i < rowsFotos.length; i++) {
-            if (String(rowsFotos[i][0]).replace(/\D/g, '') === dniPuro) {
-                rowIndex = i + 1; break;
-            }
-        }
+        if (rowIndex !== -1) { await serviceAccountAuth.request({ url: `https://sheets.googleapis.com/v4/spreadsheets/${ID_SPREADSHEET_MASTER}/values/'fotos'!B${rowIndex}?valueInputOption=USER_ENTERED`, method: 'PUT', data: { values: [[linkOficial]] } }); } 
+        else { await serviceAccountAuth.request({ url: `https://sheets.googleapis.com/v4/spreadsheets/${ID_SPREADSHEET_MASTER}/values/'fotos'!A:B:append?valueInputOption=USER_ENTERED`, method: 'POST', data: { values: [[dniPuro, linkOficial]] } }); }
 
-        if (rowIndex !== -1) {
-            await serviceAccountAuth.request({
-                url: `https://sheets.googleapis.com/v4/spreadsheets/${ID_SPREADSHEET_MASTER}/values/'fotos'!B${rowIndex}?valueInputOption=USER_ENTERED`,
-                method: 'PUT',
-                data: { values: [[linkOficial]] }
-            });
-        } else {
-            await serviceAccountAuth.request({
-                url: `https://sheets.googleapis.com/v4/spreadsheets/${ID_SPREADSHEET_MASTER}/values/'fotos'!A:B:append?valueInputOption=USER_ENTERED`,
-                method: 'POST',
-                data: { values: [[dniPuro, linkOficial]] }
-            });
-        }
-
-        // 3. ACTUALIZAR LA MEMORIA RAM Y AVISAR A LAS PANTALLAS
         if (!cacheDatosGlobales.diagramas.fotosImgur) cacheDatosGlobales.diagramas.fotosImgur = {};
         cacheDatosGlobales.diagramas.fotosImgur[dniPuro] = linkOficial;
         io.emit('datos_actualizados', cacheDatosGlobales);
-
-        res.json({ success: true, link: linkOficial, mensaje: "Foto vinculada exitosamente al legajo." });
-
-    } catch (error) {
-        console.error("❌ Error subiendo foto a ImgBB:", error);
-        res.status(500).json({ success: false, error: "Error en el servidor procesando la imagen." });
-    }
+        res.json({ success: true, link: linkOficial, mensaje: "Foto vinculada." });
+    } catch (error) { res.status(500).json({ success: false, error: "Error en el servidor procesando la imagen." }); }
 });
 
+// 👉 ESTO ES LO QUE MANTIENE EL SERVIDOR ENCENDIDO
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => console.log(`🚀 Servidor Node Activo en puerto ${PORT}`));
