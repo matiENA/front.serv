@@ -47,7 +47,7 @@ const ID_SPREADSHEET_MASTER = process.env.SPREADSHEET_ID || '1eQ9Y5diL5fwxYTxvse
 const ID_SPREADSHEET_DIAGRAMAS = '1mhfXpFCF6upMlnRnZjDdBVS_wqTx5q8v0qQArNCnNAU';
 const ID_SHEET_OBSERVACIONES = '1VwCNK89ecaac7IDlMWWCLHRqZoch9HB6vop5AfQEaA0';
 const ID_SHEET_APTOS_MEDICOS = '1oJmN8hurfHfNnGBYUFcBdlrIj2VUzeIyq0ZTWxTpYNI';
-const ID_SHEET_MOVIMIENTOS = '1hhJKwp9xOOHL_zZSJMbrJh5fwfsIPre155UTWhKWI44'; 
+const ID_SHEET_MOVIMIENTOS = '1ArSUOVJU0cNXk4lvc2CncBEC3e_fBXd7ICMvC_6HexQ'; 
 const ID_SHEET_KILOMETROS = '1Wr-_P4mDvldif_cAx08sp7yT8uTUrajI2HQAJF6tnGM';
 const ID_SHEET_LEGAJOS_MAESTRO = '19_UPtQYtu7l9zeZPK_glqonxD5jnxXyD8msyy_1lydg'; // 🪪 NUEVA PLANILLA LEGAJOS
 const mesesAbrev = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
@@ -235,14 +235,34 @@ async function actualizarCacheDesdeGoogle(esArranque = false) {
             }
             console.log(`✅ Flota ensamblada en RAM: ${listaChoferesMaestros.length} choferes vinculados a sus unidades diarias.`);
         } catch (e) { console.error("❌ Error construyendo la Flota en RAM:", e); }
-        
-        // ==========================================
-        // 🪪 MOTOR DE RASTREO MAESTRO (Planilla LEGAJOS vía IMPORTRANGE)
+
+// ==========================================
+        // 🪪 MOTOR DE RASTREO MAESTRO Y DNIS
         // ==========================================
         let dnisMap = {}; let telefonosMap = {};
+        
         try {
+            // 👉 1. FUENTE PRIMARIA: Pestaña 'dni' (Prioridad Absoluta)
+            const rowsDni = await fetchRango(ID_SPREADSHEET_MASTER, "'dni'!A1:D500");
+            if (rowsDni && rowsDni.length > 0) {
+                rowsDni.forEach(row => {
+                    let nomRaw = String(row[0] || "").trim();
+                    if (!nomRaw) return;
+                    let nomNorm = normalizar(nomRaw);
+                    
+                    // Columna A (índice 0) es Nombre, Columna C (índice 2) es DNI
+                    let dniStr = String(row[2] || "").replace(/\D/g, '');
+                    if (dniStr) {
+                        dnisMap[nomNorm] = { dni: String(parseInt(dniStr, 10)) };
+                    }
+                });
+                console.log(`✅ ${Object.keys(dnisMap).length} DNIs extraídos de la fuente primaria ('dni').`);
+            }
+        } catch(e) { console.error("❌ Error leyendo pestaña 'dni':", e); }
+
+        try {
+            // 👉 2. DATOS DE CONTACTO: Pestaña 'LEGAJOS' (Teléfonos, Emails, Fechas)
             const rowsLegajos = await fetchRango(ID_SPREADSHEET_MASTER, "'LEGAJOS'!A2:P350");
-            
             if (rowsLegajos && rowsLegajos.length > 0) {
                 rowsLegajos.forEach(row => {
                     if (!row || row.length < 2) return;
@@ -251,7 +271,7 @@ async function actualizarCacheDesdeGoogle(esArranque = false) {
 
                     let nomNorm = normalizar(nomRaw);
                     let legajoStr = String(row[0] || "").trim(); 
-                    let dniStr = String(row[2] || "").replace(/\D/g, '');
+                    let dniLegajoStr = String(row[2] || "").replace(/\D/g, '');
                     let telStr = String(row[3] || "").trim(); 
                     let emailStr = String(row[4] || "").trim(); 
                     let fechaAltaStr = String(row[10] || "").trim();
@@ -259,19 +279,24 @@ async function actualizarCacheDesdeGoogle(esArranque = false) {
                     let datosContacto = { legajo: legajoStr, telefono: telStr, email: emailStr, fechaAlta: fechaAltaStr };
                     telefonosMap[nomNorm] = datosContacto;
 
-                    if (dniStr) {
-                        let dniPuro = String(parseInt(dniStr, 10)); 
+                    // Si el chofer NO estaba en la pestaña 'dni', lo rescatamos de Legajos como plan B
+                    if (dniLegajoStr && !dnisMap[nomNorm]) {
+                        let dniPuro = String(parseInt(dniLegajoStr, 10)); 
                         dnisMap[nomNorm] = { dni: dniPuro }; 
-                        telefonosMap[dniPuro] = datosContacto;
+                    }
+                    
+                    // Vinculamos su teléfono al DNI definitivo para que el cruce de fotos y aptos sea perfecto
+                    if (dnisMap[nomNorm] && dnisMap[nomNorm].dni) {
+                        telefonosMap[dnisMap[nomNorm].dni] = datosContacto;
                     }
                 });
-                console.log(`✅ ${Object.keys(dnisMap).length} choferes extraídos de 'LEGAJOS' (vía IMPORTRANGE).`);
             } else {
                 console.warn("⚠️ No se encontraron datos en la pestaña 'LEGAJOS' del Master.");
             }
         } catch (e) { console.error("❌ Error en Motor de Rastreo de Legajos:", e); }
 
         try {
+            // 👉 3. RESPALDO FINAL: Documentaciones externas
             const ID_SHEET_HABILITACIONES = '1hPDno09tMBtKh7aIdsvzEYcyOY7leYj2B6XnniD0aXg'; const ID_SHEET_DOCUMENTOS = '1pnYXKDSv70Vq78Rchxus5FHMKdgXdbfltVsEg6vArjo';
             const [resDocsTab, resHabsTab] = await Promise.all([ fetchRango(ID_SHEET_DOCUMENTOS, "'PERIODICOS'!A1:E300"), fetchRango(ID_SHEET_HABILITACIONES, "'VENCIMIENTOS'!A1:C300") ]);
             const extraerDni = (c) => { let l = String(c).replace(/\D/g, ''); return l.length === 11 ? String(parseInt(l.substring(2, 10), 10)) : (l.length === 10 ? String(parseInt(l.substring(2, 9), 10)) : String(parseInt(l, 10))); };
@@ -280,7 +305,6 @@ async function actualizarCacheDesdeGoogle(esArranque = false) {
         } catch (e) {}
 
         resDiagGAS.dnis = dnisMap; resDiagGAS.telefonos = telefonosMap;
-
         // ==========================================
         // 🩺 EXTRACCIÓN DE APTOS MÉDICOS (Dinámico Diario)
         // ==========================================
@@ -662,27 +686,34 @@ app.post('/api/proxy', async (req, res) => {
 });
 
 // ==========================================
-// 📸 MÓDULO DE FOTOS (SUBIDA A IMGUR Y GOOGLE SHEETS)
+// 📸 MÓDULO DE FOTOS (SUBIDA A IMGBB Y GOOGLE SHEETS)
 // ==========================================
 app.post('/api/subir-foto', async (req, res) => {
     try {
         const { dni, imagenBase64 } = req.body;
         if (!dni || !imagenBase64) return res.status(400).json({ success: false, error: "Faltan datos (DNI o Imagen)" });
 
-        const IMGUR_CLIENT_ID = process.env.IMGUR_CLIENT_ID || 'Tu_Client_ID_Aqui';
+        // 1. SUBIR LA FOTO A LA API DE IMGBB
+        const IMGBB_API_KEY = process.env.IMGBB_API_KEY || 'Pon_Tu_Clave_Aqui_Si_No_Usas_Variables';
+        
+        // Limpiamos el prefijo 'data:image/jpeg;base64,'
         const base64Data = imagenBase64.replace(/^data:image\/\w+;base64,/, "");
         
-        const imgurResponse = await fetch('https://api.imgur.com/3/image', {
+        // ImgBB requiere que los datos viajen como Form Data
+        const formData = new URLSearchParams();
+        formData.append("image", base64Data);
+        
+        const imgbbResponse = await fetch(`https://api.imgbb.com/1/upload?key=${IMGBB_API_KEY}`, {
             method: 'POST',
-            headers: { 'Authorization': `Client-ID ${IMGUR_CLIENT_ID}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ image: base64Data, type: 'base64' })
+            body: formData
         });
         
-        const imgurData = await imgurResponse.json();
-        if (!imgurData.success) throw new Error("La API de Imgur rechazó la imagen.");
+        const imgbbData = await imgbbResponse.json();
+        if (!imgbbData.success) throw new Error("La API de ImgBB rechazó la imagen.");
         
-        const linkOficial = imgurData.data.link;
+        const linkOficial = imgbbData.data.url; // Ej: https://i.ibb.co/xxxxx/foto.jpg
 
+        // 2. GUARDAR EL LINK EN LA PESTAÑA 'fotos' DE GOOGLE SHEETS
         const urlPestañaFotos = `https://sheets.googleapis.com/v4/spreadsheets/${ID_SPREADSHEET_MASTER}/values/'fotos'!A:B`;
         const resFotos = await serviceAccountAuth.request({ url: urlPestañaFotos });
         const rowsFotos = resFotos.data.values || [];
@@ -710,6 +741,7 @@ app.post('/api/subir-foto', async (req, res) => {
             });
         }
 
+        // 3. ACTUALIZAR LA MEMORIA RAM Y AVISAR A LAS PANTALLAS
         if (!cacheDatosGlobales.diagramas.fotosImgur) cacheDatosGlobales.diagramas.fotosImgur = {};
         cacheDatosGlobales.diagramas.fotosImgur[dniPuro] = linkOficial;
         io.emit('datos_actualizados', cacheDatosGlobales);
@@ -717,7 +749,7 @@ app.post('/api/subir-foto', async (req, res) => {
         res.json({ success: true, link: linkOficial, mensaje: "Foto vinculada exitosamente al legajo." });
 
     } catch (error) {
-        console.error("❌ Error subiendo foto:", error);
+        console.error("❌ Error subiendo foto a ImgBB:", error);
         res.status(500).json({ success: false, error: "Error en el servidor procesando la imagen." });
     }
 });
