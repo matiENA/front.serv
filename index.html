@@ -127,48 +127,61 @@
 
 <header class="max-w-7xl mx-auto w-full pt-6 pb-2 px-4 sm:px-6 flex justify-between items-start sm:items-center">
     <div>
-      <h1 class="text-2xl sm:text-3xl font-bold text-primary tracking-tight">Estado de Conductores</h1>
-      <p class="text-xs sm:text-sm font-normal text-gray-500 mt-1">Gestión de diagramas y alertas de actividad</p>
+        <h1 class="text-2xl sm:text-3xl font-bold text-primary tracking-tight">Estado de Conductores</h1>
+        <p class="text-xs sm:text-sm font-normal text-gray-500 mt-1">Gestión de diagramas y alertas de actividad</p>
     </div>
     
-<div class="flex items-center gap-3">
-        <button onclick="toggleDarkMode()" title="Cambiar Tema" class="group flex items-center justify-center w-10 h-10 bg-white border border-gray-200 text-gray-500 hover:text-indigo-600 hover:bg-indigo-50 hover:border-indigo-200 rounded-xl transition-all shadow-sm shrink-0">
+    <div class="flex items-center gap-3">
+        <!-- Botoón de Tema Oscuro (Afuera para acceso rápido) -->
+        <button onclick="toggleDarkMode()" title="Cambiar Tema" class="group flex items-center justify-center w-10 h-10 bg-white border border-gray-200 text-gray-500 hover:text-indigo-600 hover:bg-indigo-50 hover:border-indigo-200 rounded-xl transition-all shadow-sm shrink-0 focus:outline-none">
             <svg id="icon-sun" class="w-5 h-5 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"></path></svg>
             <svg id="icon-moon" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"></path></svg>
         </button>
-        
-        <button onclick="cerrarSesion()" title="Cerrar Sesión" class="group flex items-center gap-2 bg-white border border-gray-200 text-gray-500 hover:text-red-600 hover:bg-red-50 hover:border-red-200 px-3 sm:px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-sm shrink-0">
-          <svg class="w-4 h-4 transition-transform group-hover:-translate-x-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"></path>
-          </svg>
-          <span class="hidden sm:block uppercase tracking-wider">Cerrar Sesión</span>
-        </button>
-    </div>
 
-    <div class="relative group">
-        <button class="flex items-center justify-center w-10 h-10 bg-white border border-gray-200 text-gray-600 hover:text-indigo-600 hover:bg-indigo-50 rounded-xl transition-all shadow-sm focus:outline-none">
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path></svg>
-        </button>
-        
-        <div class="absolute right-0 mt-2 w-48 bg-white border border-gray-100 rounded-xl shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50 transform origin-top-right group-hover:scale-100 scale-95">
-            <div class="p-2 flex flex-col gap-1">
-                <span class="px-3 py-1.5 text-[9px] font-black text-gray-400 uppercase tracking-widest border-b border-gray-100 mb-1">Módulos Especiales</span>
-                
-                <button onclick="cambiarVistaPrincipal('inducciones')" class="w-full text-left px-3 py-2 rounded-lg text-sm font-bold text-gray-700 hover:bg-teal-50 hover:text-teal-700 transition-colors flex items-center gap-2">
-                    <svg class="w-4 h-4 text-teal-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"></path></svg>
-                    Inducciones
-                </button>
-                
-                <button onclick="cambiarVistaPrincipal('unidades')" class="w-full text-left px-3 py-2 rounded-lg text-sm font-bold text-gray-700 hover:bg-blue-50 hover:text-blue-700 transition-colors flex items-center gap-2">
-                    <svg class="w-4 h-4 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17a2 2 0 11-4 0 2 2 0 014 0zM19 17a2 2 0 11-4 0 2 2 0 014 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16V6a1 1 0 00-1-1H4a1 1 0 00-1 1v10a1 1 0 001 1h1m8-1a1 1 0 01-1 1H9m4-1V8a1 1 0 011-1h2.586a1 1 0 01.707.293l3.414 3.414a1 1 0 01.293.707V16a1 1 0 01-1 1h-1m-6-1a1 1 0 001 1h1M5 17a2 2 0 104 0m-4 0a2 2 0 114 0m6 0a2 2 0 104 0m-4 0a2 2 0 114 0"></path></svg>
-                    Control de Flota
-                </button>
-                
+        <!-- Menú Hamburguesa -->
+        <div class="relative group">
+            <button class="flex items-center justify-center w-10 h-10 bg-white border border-gray-200 text-gray-600 hover:text-indigo-600 hover:bg-indigo-50 rounded-xl transition-all shadow-sm focus:outline-none">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path></svg>
+            </button>
+            
+            <!-- Desplegable -->
+            <div class="absolute right-0 mt-2 w-52 bg-white border border-gray-100 rounded-xl shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50 transform origin-top-right group-hover:scale-100 scale-95">
+                <div class="p-2 flex flex-col gap-1">
+                    
+                    <!-- Vistas Principales -->
+                    <span class="px-3 py-1.5 text-[9px] font-black text-gray-400 uppercase tracking-widest border-b border-gray-100 mb-1">Navegación</span>
+                    
+                    <button onclick="cambiarVista()" class="w-full text-left px-3 py-2 rounded-lg text-sm font-bold text-gray-700 hover:bg-indigo-50 hover:text-indigo-700 transition-colors flex items-center gap-2">
+                        <svg class="w-4 h-4 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 3 4 7l4 4M4 7h16M16 21l4-4-4-4M20 17H4"></path></svg>
+                        Cambiar Vista
+                    </button>
+
+                    <!-- Módulos Especiales -->
+                    <span class="px-3 py-1.5 text-[9px] font-black text-gray-400 uppercase tracking-widest border-b border-gray-100 mt-2 mb-1">Módulos Especiales</span>
+                    
+                    <button onclick="cambiarVistaPrincipal('inducciones')" class="w-full text-left px-3 py-2 rounded-lg text-sm font-bold text-gray-700 hover:bg-teal-50 hover:text-teal-700 transition-colors flex items-center gap-2">
+                        <svg class="w-4 h-4 text-teal-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"></path></svg>
+                        Inducciones
+                    </button>
+                    
+                    <button onclick="cambiarVistaPrincipal('unidades')" class="w-full text-left px-3 py-2 rounded-lg text-sm font-bold text-gray-700 hover:bg-blue-50 hover:text-blue-700 transition-colors flex items-center gap-2">
+                        <svg class="w-4 h-4 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17a2 2 0 11-4 0 2 2 0 014 0zM19 17a2 2 0 11-4 0 2 2 0 014 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16V6a1 1 0 00-1-1H4a1 1 0 00-1 1v10a1 1 0 001 1h1m8-1a1 1 0 01-1 1H9m4-1V8a1 1 0 011-1h2.586a1 1 0 01.707.293l3.414 3.414a1 1 0 01.293.707V16a1 1 0 01-1 1h-1m-6-1a1 1 0 001 1h1M5 17a2 2 0 104 0m-4 0a2 2 0 114 0m6 0a2 2 0 104 0m-4 0a2 2 0 114 0"></path></svg>
+                        Control de Flota
+                    </button>
+
+                    <!-- Separador y Cerrar Sesión -->
+                    <div class="my-1 border-t border-gray-100"></div>
+
+                    <button onclick="cerrarSesion()" class="w-full text-left px-3 py-2 rounded-lg text-sm font-bold text-red-600 hover:bg-red-50 hover:text-red-700 transition-colors flex items-center gap-2">
+                        <svg class="w-4 h-4 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"></path></svg>
+                        Cerrar Sesión
+                    </button>
+                    
                 </div>
+            </div>
         </div>
     </div>
-
-  </header>
+</header>
 
   <nav class="max-w-7xl mx-auto w-full px-4 sm:px-6 mb-4 mt-2">
     <div class="bg-white p-3 rounded-2xl shadow-sm border border-gray-200 flex flex-col xl:flex-row gap-4 justify-between items-center relative">
@@ -340,6 +353,7 @@ window.sincronizarBackend = function() {
 
     fetch(API_URL, {
         method: 'POST',
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: 'sincronizarTotal' })
     })
     .then(res => res.json())
@@ -2498,6 +2512,20 @@ function getHTMLRestante(chofer, doc, hab, cert, apto, badgeExam, badgeLic, badg
     let dEst = evaluarEstadoDoc(doc.ven, fBaseObj);
     let hEst = evaluarEstadoDoc(hab.ven, fBaseObj);
     let cEst = evaluarEstadoDoc(cert.ven, fBaseObj);
+
+    // 👉 CAMBIO 1: Agrega esta función para forzar los ceros (Padding)
+const formatearParaInputDate = (fechaStr) => {
+    if (!fechaStr || fechaStr === '-' || String(fechaStr).trim() === '') return '';
+    let f = String(fechaStr).trim();
+    if (f.includes('/')) {
+        let p = f.split('/');
+        if (p.length === 3) return `${p[2].length === 2 ? '20'+p[2] : p[2]}-${p[1].padStart(2, '0')}-${p[0].padStart(2, '0')}`;
+    } else if (f.includes('-')) {
+        let p = f.split('-');
+        if (p.length === 3) return `${p[0]}-${p[1].padStart(2, '0')}-${p[2].padStart(2, '0')}`;
+    }
+    return f;
+};
     
     let badgeDocsGeneral = '';
     if (dEst === 'VENCIDO' || hEst === 'VENCIDO' || cEst === 'VENCIDO') {
@@ -2524,10 +2552,10 @@ function getHTMLRestante(chofer, doc, hab, cert, apto, badgeExam, badgeLic, badg
                 <div class="p-5">
                     <div class="bg-gray-50 p-4 rounded-xl border border-gray-200 shadow-sm">
                         <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-                            <div><div class="flex justify-between items-center mb-3"><span class="font-black text-gray-800 text-xs uppercase tracking-widest">Periódico</span>${badgeExam}</div><div><label class="block text-[9px] font-black text-gray-400 uppercase tracking-widest mb-1.5">Vencimiento</label><input type="date" id="doc-exam-ven" value="${doc.ven}" class="w-full bg-white border border-gray-300 text-xs font-bold rounded-lg p-2 focus:ring-primary outline-none shadow-sm"></div></div>
-                            <div><div class="flex justify-between items-center mb-3"><span class="font-black text-gray-800 text-xs uppercase tracking-widest">LICENCIA</span>${badgeLic}</div><div><label class="block text-[9px] font-black text-gray-400 uppercase tracking-widest mb-1.5">Vencimiento</label><input type="date" id="doc-lic-ven" value="${hab.ven}" class="w-full bg-white border border-gray-300 text-xs font-bold rounded-lg p-2 focus:ring-primary outline-none shadow-sm"></div></div>
-                            <div><div class="flex justify-between items-center mb-3"><span class="font-black text-gray-800 text-xs uppercase tracking-widest">CERTIFICADO M.P</span>${badgeCert}</div><div><label class="block text-[9px] font-black text-gray-400 uppercase tracking-widest mb-1.5">Vencimiento</label><input type="date" id="doc-cert-ven" value="${cert.ven}" class="w-full bg-white border border-gray-300 text-xs font-bold rounded-lg p-2 focus:ring-primary outline-none shadow-sm"></div></div>
-                        </div>
+    <div><div class="flex justify-between items-center mb-3"><span class="font-black text-gray-800 text-xs uppercase tracking-widest">Periódico</span>${badgeExam}</div><div><label class="block text-[9px] font-black text-gray-400 uppercase tracking-widest mb-1.5">Vencimiento</label><input type="date" id="doc-exam-ven" value="${formatearParaInputDate(doc.ven)}" class="w-full bg-white border border-gray-300 text-xs font-bold rounded-lg p-2 focus:ring-primary outline-none shadow-sm"></div></div>
+    <div><div class="flex justify-between items-center mb-3"><span class="font-black text-gray-800 text-xs uppercase tracking-widest">LICENCIA</span>${badgeLic}</div><div><label class="block text-[9px] font-black text-gray-400 uppercase tracking-widest mb-1.5">Vencimiento</label><input type="date" id="doc-lic-ven" value="${formatearParaInputDate(hab.ven)}" class="w-full bg-white border border-gray-300 text-xs font-bold rounded-lg p-2 focus:ring-primary outline-none shadow-sm"></div></div>
+    <div><div class="flex justify-between items-center mb-3"><span class="font-black text-gray-800 text-xs uppercase tracking-widest">CERTIFICADO M.P</span>${badgeCert}</div><div><label class="block text-[9px] font-black text-gray-400 uppercase tracking-widest mb-1.5">Vencimiento</label><input type="date" id="doc-cert-ven" value="${formatearParaInputDate(cert.ven)}" class="w-full bg-white border border-gray-300 text-xs font-bold rounded-lg p-2 focus:ring-primary outline-none shadow-sm"></div></div>
+</div>
                         <div class="mt-6 flex justify-end"><button id="btn-guardar-docs" onclick="guardarDocs('${chofer.nom}')" class="w-full md:w-auto px-6 py-2.5 bg-blue-50 text-primary border border-blue-200 text-xs font-black uppercase tracking-wider rounded-xl hover:bg-blue-100 transition-colors shadow-sm flex justify-center items-center gap-2 h-[42px]">💾 Guardar Vencimientos</button></div>
                     </div>
                 </div>
@@ -2585,6 +2613,7 @@ window.guardarEstadoDesdeRango = function(safeId, startIso, endIso) {
 
         fetch(API_URL, {
             method: 'POST',
+            headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload)
         })
         .then(res => res.json())
@@ -2629,6 +2658,7 @@ window.guardarEstadoDesdeRango = function(safeId, startIso, endIso) {
 
         fetch(API_URL, {
             method: 'POST',
+            headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload)
         })
         .then(res => res.json())
@@ -3330,6 +3360,7 @@ async function enviarCambioEstado(chofer, fIni, fFin, estado) {
 
   await fetch(API_URL, {
     method: 'POST',
+    headers: { "Content-Type": "application/json" }, 
     body: JSON.stringify(payload)
   });
 }
@@ -3648,19 +3679,17 @@ window.procesarNuevaFoto = function(inputElement, dniChofer, safeId) {
 // 🌱 DETECTOR DE PERÍODO DE PRUEBA (6 MESES)
 // ==========================================
 window.calcularMesesPrueba = function(chofer) {
-    if (!window.cacheDatosGlobales || !window.cacheDatosGlobales.diagramas || !window.cacheDatosGlobales.diagramas.telefonos) return 999;
+    if (typeof dnisGlobales === 'undefined' || typeof telefonosGlobales === 'undefined') return 999;
     
     let nomNorm = String(chofer.nom || '').trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, ' ');
-    let dni = (window.cacheDatosGlobales.diagramas.dnis && window.cacheDatosGlobales.diagramas.dnis[nomNorm]) 
-        ? window.cacheDatosGlobales.diagramas.dnis[nomNorm].dni : null;
     
-    let datosContacto = (dni && window.cacheDatosGlobales.diagramas.telefonos[dni]) 
-        ? window.cacheDatosGlobales.diagramas.telefonos[dni] 
-        : window.cacheDatosGlobales.diagramas.telefonos[nomNorm];
+    let datosDni = dnisGlobales[nomNorm];
+    let dni = datosDni ? (datosDni.dni || datosDni) : null;
+    
+    let datosContacto = (dni && telefonosGlobales[dni]) ? telefonosGlobales[dni] : telefonosGlobales[nomNorm];
         
-    if (!datosContacto || !datosContacto.fechaAlta) return 999; 
+    if (!datosContacto || !datosContacto.fechaAlta || datosContacto.fechaAlta === '-') return 999; 
     
-    // Convertir fecha (Soporta formatos "3 Dec 2024" y "03/12/2024")
     let d = new Date(datosContacto.fechaAlta);
     if (isNaN(d.getTime())) {
         let p = datosContacto.fechaAlta.split('/');
@@ -3675,7 +3704,7 @@ window.calcularMesesPrueba = function(chofer) {
     return mesesDiff;
 };
 
-// 👉 BADGE SUTIL (Solo para Vista Diaria)
+// 👉 BADGE DE BAJO CONTRASTE
 window.obtenerBadgePrueba = function(chofer) {
     let meses = window.calcularMesesPrueba(chofer);
     if (meses >= 0 && meses < 6) {
@@ -3684,7 +3713,7 @@ window.obtenerBadgePrueba = function(chofer) {
     return '';
 };
 
-// 👉 PROGRESS BAR (6 Slots - Para Vista Individual)
+// 👉 PROGRESS BAR PARA VISTA INDIVIDUAL
 window.obtenerProgressBarPrueba = function(chofer) {
     let meses = window.calcularMesesPrueba(chofer);
     if (meses < 0 || meses >= 6 || meses === 999) return ''; 
@@ -3693,20 +3722,51 @@ window.obtenerProgressBarPrueba = function(chofer) {
     <div title="Período de prueba: ${meses} meses completados" class="flex flex-col items-center justify-center bg-white px-3 py-1 rounded-xl border border-slate-200 shrink-0 shadow-sm h-[40px] xl:h-[42px]">
         <span class="text-[8px] font-bold text-slate-400 uppercase tracking-widest mb-1 leading-none">Período de Prueba</span>
         <div class="flex gap-1">`;
-    
-    // Llenado de slots (Pastillas grises oscuras = llenas, grises claras = vacías)
     for(let i=0; i<6; i++) {
-        if (i < meses) {
-            html += `<div class="w-3 h-1.5 rounded-full bg-slate-400 shadow-inner"></div>`;
-        } else {
-            html += `<div class="w-3 h-1.5 rounded-full bg-slate-100 border border-slate-200"></div>`;
-        }
+        if (i < meses) html += `<div class="w-3 h-1.5 rounded-full bg-slate-400 shadow-inner"></div>`;
+        else html += `<div class="w-3 h-1.5 rounded-full bg-slate-100 border border-slate-200"></div>`;
     }
-    
     html += `</div></div>`;
     return html;
 };
-  </script>
+
+document.addEventListener("DOMContentLoaded", () => {
+    // Referencias al DOM del menú
+    const burgerBtn = document.getElementById('burger-btn');
+    const mobileMenu = document.getElementById('mobile-menu');
+    const burgerIcon = document.getElementById('burger-icon');
+    const closeIcon = document.getElementById('close-icon');
+
+    // 1. Abrir/Cerrar menú al tocar la hamburguesa
+    burgerBtn.addEventListener('click', (e) => {
+        e.stopPropagation(); // Evita que el click se propague y cierre el menú inmediatamente
+        mobileMenu.classList.toggle('hidden');
+        burgerIcon.classList.toggle('hidden');
+        closeIcon.classList.toggle('hidden');
+    });
+
+    // 2. Cerrar el menú si se hace clic en cualquier otro lado de la pantalla
+    document.addEventListener('click', (e) => {
+        if (!mobileMenu.contains(e.target) && !burgerBtn.contains(e.target)) {
+            mobileMenu.classList.add('hidden');
+            burgerIcon.classList.remove('hidden');
+            closeIcon.classList.add('hidden');
+        }
+    });
+
+    // 3. Vincular el botón Switch (Asegúrate de que la función cambiarVista coincida con la que ya tienes)
+    document.getElementById('btnSwitchVista').addEventListener('click', () => {
+        // Llama a tu función original para cambiar la vista
+        cambiarVista(); 
+        
+        // Cierra el menú automáticamente después de hacer clic
+        mobileMenu.classList.add('hidden');
+        burgerIcon.classList.remove('hidden');
+        closeIcon.classList.add('hidden');
+    });
+});
+
+</script>
   <script src="modulo_inducciones.js"></script>
 </body>
 </html>
