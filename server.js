@@ -5,6 +5,7 @@ const http = require('http');
 const { Server } = require('socket.io');
 const { GoogleSpreadsheet } = require('google-spreadsheet');
 const { JWT } = require('google-auth-library');
+const webhookRouter = require('./webhook');
 const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
@@ -337,6 +338,7 @@ async function actualizarCacheDesdeGoogle() {
     } catch (error) { console.error("❌ Error RAM:", error); } 
 }
 
+app.use('/api/webhook', webhookRouter(cacheDatosGlobales, io));
 app.get('/health', (req, res) => res.status(200).send('OK'));
 app.get('/api/datos', (req, res) => {
     if (!cacheDatosGlobales.diagramas) return res.status(503).json({ error: "Cargando DB..." });
@@ -473,62 +475,202 @@ app.post('/api/proxy', async (req, res) => {
             return res.json({ success: true, message: "OK" }); // ✅ Solucionado
         }
 
+// ==============================================================
+        // ✏️ ACTUALIZAR ESTADO DEL DIAGRAMA
+        // ==============================================================
         if (body && body.action === 'actualizarEstado') {
-            let nBuscado = normalizar(body.nombre); let cur = new Date(body.startIso + "T12:00:00"); let fFin = new Date(body.endIso + "T12:00:00");
+            let nBuscado = normalizar(body.nombre); 
+            let cur = new Date(body.startIso + "T12:00:00"); 
+            let fFin = new Date(body.endIso + "T12:00:00");
             let idxEst = 0; let updatesBySheet = {};
             
             while(cur <= fFin) {
                 let tName = mesesAbrev[cur.getMonth()] + "-" + String(cur.getFullYear()).slice(-2);
                 if (!updatesBySheet[tName]) updatesBySheet[tName] = {};
-                let val = Array.isArray(body.est) ? body.est[idxEst] : body.est; if (val === 'BORRAR') val = '-';
+                
+                let val = Array.isArray(body.est) ? body.est[idxEst] : body.est; 
+                if (val === 'BORRAR') val = ''; 
+                
                 updatesBySheet[tName][cur.getDate()] = val;
                 
                 let isoStr = cur.toISOString().split('T')[0];
-                if (cacheDatosGlobales.diagramas?.diagramas) { let ch = cacheDatosGlobales.diagramas.diagramas.find(c => normalizar(c.nom) === nBuscado); if (ch) { if (!ch._diasIso) ch._diasIso = {}; ch._diasIso[isoStr] = val; } }
+                if (cacheDatosGlobales.diagramas?.diagramas) { 
+                    let ch = cacheDatosGlobales.diagramas.diagramas.find(c => normalizar(c.nom) === nBuscado); 
+                    if (ch) { 
+                        // Actualiza Diccionario ISO
+                        if (!ch._diasIso) ch._diasIso = {}; 
+                        ch._diasIso[isoStr] = val; 
+                        
+                        // 👉 EL FIX: ACTUALIZAR LA CADENA SEPARADA POR COMAS EN RAM
+                        if (!ch.dias) ch.dias = {};
+                        if (!ch.dias[tName]) ch.dias[tName] = new Array(31).fill('-').join(',');
+                        
+                        let tiraDias = ch.dias[tName].split(',');
+                        let diaNum = cur.getDate();
+                        // El frontend lee '-' como vacío
+                        tiraDias[diaNum - 1] = val === '' ? '-' : val; 
+                        ch.dias[tName] = tiraDias.join(',');
+                    } 
+                }
                 cur.setDate(cur.getDate() + 1); idxEst++;
             }
+            
             io.emit('datos_actualizados', cacheDatosGlobales);
 
+            // ---------------------------------------------------------
+            // GUARDADO EN GOOGLE SHEETS EN SEGUNDO PLANO
+            // ---------------------------------------------------------
             for (let tab in updatesBySheet) {
                 try {
                     const rowsTab = (await serviceAccountAuth.request({ url: `https://sheets.googleapis.com/v4/spreadsheets/${ID_SPREADSHEET_DIAGRAMAS}/values/'${tab}'!A:C` })).data.values || [];
-                    let rIdx = -1; for(let i=0; i<rowsTab.length; i++) { if(normalizar(rowsTab[i][1]) === nBuscado) { rIdx = i + 1; break; } }
-                    if (rIdx !== -1) {
-                        let rowData = (await serviceAccountAuth.request({ url: `https://sheets.googleapis.com/v4/spreadsheets/${ID_SPREADSHEET_DIAGRAMAS}/values/'${tab}'!D${rIdx}:AH${rIdx}` })).data.values?.[0] || new Array(31).fill('-');
-                        while(rowData.length < 31) rowData.push('-');
-                        for (let day in updatesBySheet[tab]) rowData[parseInt(day)-1] = updatesBySheet[tab][day];
-                        await serviceAccountAuth.request({ url: `https://sheets.googleapis.com/v4/spreadsheets/${ID_SPREADSHEET_DIAGRAMAS}/values/'${tab}'!D${rIdx}:AH${rIdx}?valueInputOption=USER_ENTERED`, method: 'PUT', data: { values: [rowData] } });
+                    let rIdx = -1; 
+                    for(let i=0; i<rowsTab.length; i++) { 
+                        if(normalizar(rowsTab[i][1]) === nBuscado) { rIdx = i + 1; break; } 
                     }
-                } catch(e) {}
+                    if (rIdx !== -1) {
+                        let rowData = (await serviceAccountAuth.request({ url: `https://sheets.googleapis.com/v4/spreadsheets/${ID_SPREADSHEET_DIAGRAMAS}/values/'${tab}'!E${rIdx}:AI${rIdx}` })).data.values?.[0] || [];
+                        
+                        // Rellenar celdas fantasma con vacío (''), NO con guiones ('-')
+                        while(rowData.length < 31) rowData.push(''); 
+                        
+                        for (let day in updatesBySheet[tab]) {
+                            rowData[parseInt(day)-1] = updatesBySheet[tab][day];
+                        }
+                        
+                        await serviceAccountAuth.request({ url: `https://sheets.googleapis.com/v4/spreadsheets/${ID_SPREADSHEET_DIAGRAMAS}/values/'${tab}'!E${rIdx}:AI${rIdx}?valueInputOption=USER_ENTERED`, method: 'PUT', data: { values: [rowData] } });
+                    }
+                } catch(e) { console.error("Error escribiendo estado en Sheets:", e); }
             }
+            
+            return res.json({ success: true, message: "OK" });
         }
 
-        if (body && body.action === 'guardarHojaRutaPlanilla') {
-            let nBuscado = normalizar(body.nombre); let targetStr = `${String(new Date(body.fecha + "T12:00:00").getDate()).padStart(2,'0')}/${String(new Date(body.fecha + "T12:00:00").getMonth()+1).padStart(2,'0')}/${String(new Date(body.fecha + "T12:00:00").getFullYear()).slice(-2)}`;
-            let strHojas = (body.hojas || []).join(', ');
+// ==============================================================
+        // 🚚 GUARDAR HOJA DE RUTA (RANGO O DÍA ÚNICO)
+        // ==============================================================
+        if (body && body.action === 'guardarHojaRutaRango') {
+            const normalizar = (n) => String(n || '').trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, ' ');
+            const nBuscado = normalizar(body.nombre);
+            
+            const curDate = new Date(body.startIso + "T12:00:00");
+            const endDate = new Date(body.endIso + "T12:00:00");
+            
+            const hojasEntrantes = Array.isArray(body.hojas) ? body.hojas : String(body.hojas || '').split(',').map(s => s.trim()).filter(Boolean);
+            const flagOverwrite = body.overwrite === true;
 
+            // ---------------------------------------------------------
+            // 1. INYECCIÓN EN RAM Y EMISIÓN INSTANTÁNEA (TIEMPO REAL)
+            // ---------------------------------------------------------
             if (cacheDatosGlobales.diagramas) {
-                if(!cacheDatosGlobales.diagramas.nuevaSeccionViajes[nBuscado]) cacheDatosGlobales.diagramas.nuevaSeccionViajes[nBuscado] = {};
-                if(!cacheDatosGlobales.diagramas.nuevaSeccionViajes[nBuscado][body.fecha]) cacheDatosGlobales.diagramas.nuevaSeccionViajes[nBuscado][body.fecha] = { dominio: body.tractor || '', km: 0, campo: 0, hoja_ruta: [] };
-                let target = cacheDatosGlobales.diagramas.nuevaSeccionViajes[nBuscado][body.fecha];
-                (body.hojas || []).filter(Boolean).forEach(h => { if (!target.hoja_ruta.includes(h)) target.hoja_ruta.push(h); });
+                if (!cacheDatosGlobales.diagramas.nuevaSeccionViajes[nBuscado]) {
+                    cacheDatosGlobales.diagramas.nuevaSeccionViajes[nBuscado] = {};
+                }
+
+                let tempCur = new Date(curDate);
+                while (tempCur <= endDate) {
+                    let isoStr = tempCur.toISOString().split('T')[0];
+
+                    if (!cacheDatosGlobales.diagramas.nuevaSeccionViajes[nBuscado][isoStr]) {
+                        cacheDatosGlobales.diagramas.nuevaSeccionViajes[nBuscado][isoStr] = { dominio: body.tractor || '', km: 0, campo: 0, hoja_ruta: [] };
+                    }
+
+                    let target = cacheDatosGlobales.diagramas.nuevaSeccionViajes[nBuscado][isoStr];
+                    
+                    if (flagOverwrite) {
+                        target.hoja_ruta = [...hojasEntrantes]; // Reemplazo absoluto (ideal para borrar)
+                    } else {
+                        // Modo aditivo (Modal de rango)
+                        hojasEntrantes.forEach(h => { if (!target.hoja_ruta.includes(h)) target.hoja_ruta.push(h); });
+                    }
+
+                    tempCur.setDate(tempCur.getDate() + 1);
+                }
+                
                 io.emit('datos_actualizados', cacheDatosGlobales);
             }
 
-            const rowsBC = (await serviceAccountAuth.request({ url: `https://sheets.googleapis.com/v4/spreadsheets/${ID_SHEET_KILOMETROS}/values/'KM'!B:C` })).data.values || [];
-            let rIdx = -1;
-            for (let i = 1; i < rowsBC.length; i++) {
-                if (normalizar(rowsBC[i][1]) === nBuscado) {
-                    let p = String(rowsBC[i][0] || '').trim().split(' ')[0].split(/[\/\-]/);
-                    if (p.length >= 3 && `${String(parseInt(p[p[0].length===4?2:0], 10)).padStart(2,'0')}/${String(parseInt(p[1], 10)).padStart(2,'0')}/${p[p[0].length===4?0:2].slice(-2)}` === targetStr) { rIdx = i + 1; break; }
-                    else if (String(rowsBC[i][0]).includes(targetStr) || String(rowsBC[i][0]).startsWith(body.fecha)) { rIdx = i + 1; break; }
+            // ---------------------------------------------------------
+            // 2. PERSISTENCIA EN GOOGLE SHEETS (SEGUNDO PLANO)
+            // ---------------------------------------------------------
+            const rowsKM = (await serviceAccountAuth.request({ 
+                url: `https://sheets.googleapis.com/v4/spreadsheets/${ID_SHEET_KILOMETROS}/values/'KM'!A:T` 
+            })).data.values || [];
+
+            let reqs = [];
+            const docKm = new GoogleSpreadsheet(ID_SHEET_KILOMETROS, serviceAccountAuth);
+            let sheetLoaded = false;
+
+            let loopDate = new Date(curDate);
+            while (loopDate <= endDate) {
+                let isoStr = loopDate.toISOString().split('T')[0];
+                let targetStrSheet = `${String(loopDate.getDate()).padStart(2, '0')}/${String(loopDate.getMonth() + 1).padStart(2, '0')}/${String(loopDate.getFullYear()).slice(-2)}`;
+                
+                let filaIndex = -1;
+                let hojasSheetExistentes = "";
+
+                // 👉 BÚSQUEDA EXACTA PARA EVITAR DUPLICAR FILAS
+                for (let i = 1; i < rowsKM.length; i++) {
+                    if (normalizar(rowsKM[i][2]) === nBuscado) {
+                        let fechaCelda = String(rowsKM[i][1] || '').trim();
+                        let celdaIso = "";
+                        
+                        // Parseo inteligente de la fecha de Google Sheets
+                        let partes = fechaCelda.split(' ')[0].split(/[\/\-]/);
+                        if (partes.length >= 3) {
+                            if (partes[0].length === 4) { // Si viene como YYYY-MM-DD
+                                celdaIso = `${partes[0]}-${partes[1].padStart(2, '0')}-${partes[2].padStart(2, '0')}`;
+                            } else { // Si viene como DD/MM/YY o DD/MM/YYYY
+                                let aa = partes[2].length === 2 ? "20" + partes[2] : partes[2];
+                                celdaIso = `${aa}-${partes[1].padStart(2, '0')}-${partes[0].padStart(2, '0')}`;
+                            }
+                        }
+
+                        if (celdaIso === isoStr || fechaCelda === isoStr) {
+                            filaIndex = i + 1; // Encontramos la fila exacta
+                            hojasSheetExistentes = String(rowsKM[i][19] || "").trim(); // Col T
+                            break; // Detenemos la búsqueda
+                        }
+                    }
                 }
+
+                let finalHojasStr = "";
+                if (flagOverwrite) {
+                    finalHojasStr = hojasEntrantes.join(', ');
+                } else {
+                    let arrExistentes = hojasSheetExistentes ? hojasSheetExistentes.split(',').map(s => s.trim()).filter(Boolean) : [];
+                    hojasEntrantes.forEach(h => { if (!arrExistentes.includes(h)) arrExistentes.push(h); });
+                    finalHojasStr = arrExistentes.join(', ');
+                }
+
+                if (filaIndex !== -1) {
+                    // Inyecta en la celda exacta de la misma fila (Columna T)
+                    reqs.push(
+                        serviceAccountAuth.request({ 
+                            url: `https://sheets.googleapis.com/v4/spreadsheets/${ID_SHEET_KILOMETROS}/values/'KM'!T${filaIndex}?valueInputOption=USER_ENTERED`, 
+                            method: 'PUT', 
+                            data: { values: [[finalHojasStr]] } 
+                        })
+                    );
+                } else {
+                    // Crea fila nueva SOLO si el día no existía de ninguna forma
+                    if (!sheetLoaded) { await docKm.loadInfo(); sheetLoaded = true; }
+                    let sheetTarget = docKm.sheetsByTitle['KM'] || docKm.sheetsByIndex[0];
+                    await sheetTarget.addRow([
+                        body.tractor || "", targetStrSheet, body.nombre, "","","","","","","","","","","","","","","","", finalHojasStr
+                    ]);
+                }
+
+                loopDate.setDate(loopDate.getDate() + 1);
             }
 
-            if (rIdx !== -1) { await serviceAccountAuth.request({ url: `https://sheets.googleapis.com/v4/spreadsheets/${ID_SHEET_KILOMETROS}/values/'KM'!T${rIdx}?valueInputOption=USER_ENTERED`, method: 'PUT', data: { values: [[strHojas]] } }); } 
-            else { const docKm = new GoogleSpreadsheet(ID_SHEET_KILOMETROS, serviceAccountAuth); await docKm.loadInfo(); await (docKm.sheetsByTitle['KM'] || docKm.sheetsByIndex[0]).addRow([body.tractor || "", targetStr, body.nombre, "","","","","","","","","","","","","","","","", strHojas]); }
+            if (reqs.length > 0) {
+                await Promise.all(reqs).catch(e => console.error("Error Sheets Batch PUT:", e));
+            }
+            
+            return res.json({ success: true, message: "OK" });
         }
 
+        // Si la petición no entra en ningún if anterior
         res.json({ success: true, message: "OK" });
 
     } catch (error) { res.status(500).json({ success: false, error: "Error en Proxy" }); }
